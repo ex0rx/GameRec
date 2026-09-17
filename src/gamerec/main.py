@@ -1,11 +1,9 @@
 from fastapi import FastAPI
 
+from gamerec.api.games import router as games_router
 from gamerec.api.health import router as health_router
 
-app = FastAPI(
-    title="GameRec API",
-    version="0.1.0",
-    description="A recommendation system for games",
-)
+app = FastAPI()
 
 app.include_router(health_router)
+app.include_router(games_router)

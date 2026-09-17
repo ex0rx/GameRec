@@ -1,7 +1,11 @@
 from fastapi import FastAPI
 
-app = FastAPI(title="GameRec", description="A recommendation system for games", version="0.1.0")
+from gamerec.api.health import router as health_router
 
-@app.get("/health")
-def get_health():
-    return {"status": "healthy"}
+app = FastAPI(
+    title="GameRec API",
+    version="0.1.0",
+    description="A recommendation system for games",
+)
+
+app.include_router(health_router)

@@ -1,4 +1,4 @@
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -64,8 +64,7 @@ async def ingest_steam_catalogue(
     )
     sync_state = result.scalar_one_or_none()
 
-    if if_modified_since is None and sync_state is not None:
-        if sync_state.last_synced_at is not None:
+    if if_modified_since is None and sync_state is not None and sync_state.last_synced_at is not None:
             if_modified_since = int(sync_state.last_synced_at.timestamp())
 
     while True:

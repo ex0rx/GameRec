@@ -6,7 +6,6 @@ import httpx
 
 from gamerec.core.config import settings
 
-
 STEAM_API_URL = (
     "https://api.steampowered.com/"
     "IStoreService/GetAppList/v1/"

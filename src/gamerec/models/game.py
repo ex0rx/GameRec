@@ -19,9 +19,19 @@ class Game(Base):
     )
 
     name: Mapped[str] = mapped_column(
-        String(255),
+        Text,
         nullable=False,
         index=True,
+    )
+
+    last_modified: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    price_change_number: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
     )
 
     short_description: Mapped[str | None] = mapped_column(
@@ -51,4 +61,19 @@ class Game(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+class SyncState(Base): # source and last successful sync timestamp for each source (e.g., Steam)
+    __tablename__ = "sync_state"
+
+    source: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        primary_key=True,
+    )
+
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
     )

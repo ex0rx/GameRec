@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "GameRec"
     environment: str = "development"
     database_url: str
+    steam_api_key: str
 
     model_config = SettingsConfigDict(
         env_file=".env",

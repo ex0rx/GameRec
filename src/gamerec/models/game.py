@@ -19,7 +19,7 @@ class Game(Base):
     )
 
     name: Mapped[str] = mapped_column(
-        String(255),
+        Text,
         nullable=False,
         index=True,
     )

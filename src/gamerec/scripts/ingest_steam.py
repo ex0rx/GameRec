@@ -1,17 +1,18 @@
 import asyncio
 
 from gamerec.db import SessionLocal
-from gamerec.services.steam_ingestion import ingest_steam_games
+from gamerec.services.steam_ingestion import ingest_steam_catalogue
 
 
 async def main() -> None:
     async with SessionLocal() as db:
-        count = await ingest_steam_games(
-            db,
-            max_results=5,
+        total = await ingest_steam_catalogue(
+            db=db,
+            page_size=1000,
+            max_pages=None,
         )
 
-    print(f"Ingested {count} Steam games")
+    print(f"Total ingested: {total}")
 
 
 if __name__ == "__main__":

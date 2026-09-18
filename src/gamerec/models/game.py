@@ -62,3 +62,18 @@ class Game(Base):
         onupdate=func.now(),
         nullable=False,
     )
+
+class SyncState(Base): # source and last successful sync timestamp for each source (e.g., Steam)
+    __tablename__ = "sync_state"
+
+    source: Mapped[str | None] = mapped_column(
+        String(255),
+        unique=True,
+        nullable=False,
+        primary_key=True,
+    )
+
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

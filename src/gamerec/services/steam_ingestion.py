@@ -1,10 +1,11 @@
 from datetime import datetime, UTC
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamerec.integrations.steam import fetch_games
-from gamerec.models.game import Game
+from gamerec.models.game import Game, SyncState
 
 
 async def upsert_steam_games(
@@ -20,7 +21,7 @@ async def upsert_steam_games(
                 if game.get("last_modified") is not None
                 else None
             ),
-            "price_change_number": game.get("price_change_number", 0),
+            "price_change_number": game.get("price_change_number"),
         }
         for game in steam_games
         if game.get("appid") and game.get("name")
@@ -40,6 +41,7 @@ async def upsert_steam_games(
         },
     )
 
+
     await db.execute(statement)
     await db.commit()
 
@@ -55,6 +57,16 @@ async def ingest_steam_catalogue(
     last_appid = 0
     total_ingested = 0
     page = 0
+    sync_started_at = datetime.now(tz=UTC)
+
+    result = await db.execute(
+        select(SyncState).where(SyncState.source == "steam")
+    )
+    sync_state = result.scalar_one_or_none()
+
+    if if_modified_since is None and sync_state is not None:
+        if sync_state.last_synced_at is not None:
+            if_modified_since = int(sync_state.last_synced_at.timestamp())
 
     while True:
         if max_pages is not None and page >= max_pages: # define number of pages to fetch, if max_pages is None, fetch all pages
@@ -95,5 +107,19 @@ async def ingest_steam_catalogue(
         # Last partial page means we've reached the end
         if len(steam_games) < page_size:
             break
+
+    if max_pages is None:       
+        statement = insert(SyncState).values(
+            {
+                "source": "steam",
+                "last_synced_at": sync_started_at,
+            }
+        ).on_conflict_do_update(
+            index_elements=[SyncState.source],
+            set_={"last_synced_at": sync_started_at},
+        )
+
+        await db.execute(statement)
+        await db.commit()
 
     return total_ingested

@@ -12,7 +12,7 @@ async def main() -> None:
             max_pages=None,
         )
 
-    print(f"Total ingested: {total}")
+    print(f"Total ingested: {total}")    
 
 
 if __name__ == "__main__":

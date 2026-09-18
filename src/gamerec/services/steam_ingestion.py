@@ -1,3 +1,5 @@
+from datetime import datetime, UTC
+
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +15,12 @@ async def upsert_steam_games(
         {
             "steam_app_id": game["appid"],
             "name": game["name"],
+            "last_modified": (
+                datetime.fromtimestamp(game["last_modified"], tz=UTC)
+                if game.get("last_modified") is not None
+                else None
+            ),
+            "price_change_number": game.get("price_change_number", 0),
         }
         for game in steam_games
         if game.get("appid") and game.get("name")
@@ -27,6 +35,8 @@ async def upsert_steam_games(
         index_elements=[Game.steam_app_id],
         set_={
             "name": statement.excluded.name,
+            "last_modified": statement.excluded.last_modified,
+            "price_change_number": statement.excluded.price_change_number,
         },
     )
 
@@ -40,6 +50,7 @@ async def ingest_steam_catalogue(
     db: AsyncSession,
     page_size: int = 1000,
     max_pages: int | None = None,
+    if_modified_since: int | None = None,
 ) -> int:
     last_appid = 0
     total_ingested = 0
@@ -52,6 +63,7 @@ async def ingest_steam_catalogue(
         steam_games = await fetch_games( # fetch page_size number of games greater than last_appid
             last_appid=last_appid,
             max_results=page_size,
+            if_modified_since=if_modified_since,
         )
 
         if not steam_games:

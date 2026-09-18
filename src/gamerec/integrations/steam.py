@@ -16,6 +16,7 @@ STEAM_API_URL = (
 async def fetch_games(
     last_appid: int = 0,
     max_results: int = 100,
+    if_modified_since: int | None = None,
 ) -> list[dict]:
     input_json = {
         "include_games": True,
@@ -26,6 +27,9 @@ async def fetch_games(
         "last_appid": last_appid,
         "max_results": max_results,
     }
+
+    if if_modified_since is not None:
+        input_json["if_modified_since"] = if_modified_since
 
     params = {
         "key": settings.steam_api_key,

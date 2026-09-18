@@ -24,6 +24,16 @@ class Game(Base):
         index=True,
     )
 
+    last_modified: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    price_change_number: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
     short_description: Mapped[str | None] = mapped_column(
         Text,
         nullable=True,

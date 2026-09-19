@@ -1,5 +1,6 @@
 # src/gamerec/integrations/steam.py
 
+import asyncio
 import json
 from datetime import date, datetime
 
@@ -62,11 +63,9 @@ async def fetch_steam_app_details(
         "appids": steam_app_id,
         "l": "english",
     }
+    url = STEAM_APP_DETAILS_API_URL
 
-    response = await client.get(
-        STEAM_APP_DETAILS_API_URL,
-        params=params,
-    )
+    response = await get_with_retry(client, url=url, params=params)
 
     response.raise_for_status()
     
@@ -90,11 +89,9 @@ async def fetch_steam_app_reviews(
         "review_type": "all",
         "num_per_page": 1,
     }
+    url = STEAM_APP_REVIEW_API_URL.format(steam_app_id=steam_app_id)
 
-    response = await client.get(
-        STEAM_APP_REVIEW_API_URL.format(steam_app_id=steam_app_id),
-        params=params,
-    )
+    response = await get_with_retry(client, url=url, params=params)
 
     response.raise_for_status()
 
@@ -149,3 +146,41 @@ def normalise_game_details(data: dict) -> dict:
         "is_free": data.get("is_free"),
         "header_image": data.get("header_image"),
     }
+
+async def get_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict,
+    max_attempts: int = 3,
+) -> httpx.Response:
+    for attempt in range(max_attempts):
+        try:
+            response = await client.get(url, params=params)
+            response.raise_for_status()
+            return response
+
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+
+            if status != 429 and status < 500:
+                raise
+
+            if attempt == max_attempts - 1:
+                raise
+
+            delay = 2**attempt
+
+            if status == 429:
+                retry_after = exc.response.headers.get("Retry-After")
+                if retry_after and retry_after.isdigit():
+                    delay = max(delay, int(retry_after))
+
+        except httpx.RequestError:
+            if attempt == max_attempts - 1:
+                raise
+
+            delay = 2**attempt
+
+        await asyncio.sleep(delay)
+
+    raise RuntimeError("Retry loop ended unexpectedly")

@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 
+import asyncio
 import httpx
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
@@ -135,12 +136,16 @@ async def get_steam_metadata(
     client: httpx.AsyncClient,
     batch_size: int = 25,
     max_games: int | None = None,
+    request_delay: float = 0.5,
 ) -> int:
-    total_processed = 0
+    if request_delay < 0:
+        raise ValueError("request_delay must be non-negative")
+    last_seen_id = 0
+    total_attempted = 0
 
     while True:
         if max_games is not None:
-            remaining = max_games - total_processed
+            remaining = max_games - total_attempted
 
             if remaining <= 0:
                 break
@@ -151,7 +156,10 @@ async def get_steam_metadata(
 
         result = await db.execute(
             select(Game)
-            .where(Game.metadata_synced_at.is_(None))
+            .where(
+                Game.metadata_synced_at.is_(None),
+                Game.id > last_seen_id,
+            )
             .order_by(Game.id)
             .limit(current_batch_size)
         )
@@ -161,7 +169,10 @@ async def get_steam_metadata(
         if not games:
             break
 
+        last_seen_id = games[-1].id if games else last_seen_id # move cursor
+
         for game in games:
+            total_attempted += 1
             try:
                 details = await fetch_steam_app_details(
                     client,
@@ -173,7 +184,6 @@ async def get_steam_metadata(
                     game.metadata_available = False
                     game.metadata_synced_at = datetime.now(tz=UTC)
 
-                    total_processed += 1
                     continue
 
                 reviews = await fetch_steam_app_reviews(
@@ -190,6 +200,9 @@ async def get_steam_metadata(
                 # Leave metadata_synced_at as NULL so it gets retried
                 continue
 
+            finally:
+                await asyncio.sleep(request_delay)  # rate-limiting
+
             normalised_details = normalise_game_details(details)
 
             for key, value in normalised_details.items():
@@ -205,8 +218,6 @@ async def get_steam_metadata(
             game.metadata_available = True
             game.metadata_synced_at = datetime.now(tz=UTC)
 
-            total_processed += 1
-
         await db.commit()
 
-    return total_processed
+    return total_attempted

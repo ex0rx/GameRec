@@ -11,8 +11,9 @@ async def main():
         count = await get_steam_metadata(
             client=httpx.AsyncClient(),
             db=db,
-            batch_size=5,
-            max_games=5,
+            batch_size=10,
+            max_games=50,
+            request_delay=0.5,
         )
 
     print(f"Processed {count} games")

@@ -67,7 +67,7 @@ async def test_retries_after_429_only(monkeypatch):
 
     async with httpx.AsyncClient(transport=transport) as client:
         with pytest.raises(httpx.HTTPStatusError) as exc_info:
-            response = await get_with_retry(
+            _ = await get_with_retry(
                 client=client,
                 url="https://example.test/steam",
                 params={"appids": 440},

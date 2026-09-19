@@ -1,8 +1,8 @@
+import asyncio
 from datetime import UTC, datetime
 
-import asyncio
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,7 +12,7 @@ from gamerec.integrations.steam import (
     fetch_steam_games,
     normalise_game_details,
 )
-from gamerec.models.game import Game, SyncState
+from gamerec.models.game import Game, SteamMetadataFailure, SyncState
 
 
 async def upsert_steam_games(
@@ -137,9 +137,14 @@ async def get_steam_metadata(
     batch_size: int = 25,
     max_games: int | None = None,
     request_delay: float = 0.5,
+    max_concurrent_requests: int = 2,
 ) -> int:
     if request_delay < 0:
         raise ValueError("request_delay must be non-negative")
+    if max_concurrent_requests < 1:
+        raise ValueError("max_concurrent_requests must be at least 1")
+
+    semaphore = asyncio.Semaphore(max_concurrent_requests)
     last_seen_id = 0
     total_attempted = 0
 
@@ -171,37 +176,51 @@ async def get_steam_metadata(
 
         last_seen_id = games[-1].id if games else last_seen_id # move cursor
 
-        for game in games:
-            total_attempted += 1
-            try:
-                details = await fetch_steam_app_details(
-                    client,
-                    game.steam_app_id,
+        results = await asyncio.gather(
+            *(
+                fetch_one_game(
+                    client=client,
+                    steam_app_id=game.steam_app_id,
+                    semaphore=semaphore,
+                    request_delay=request_delay,
                 )
+                for game in games
+            )
+        )
 
-                # Steam responded, but this app has no store metadata
-                if details is None:
-                    game.metadata_available = False
-                    game.metadata_synced_at = datetime.now(tz=UTC)
+        total_attempted += len(games)
 
-                    continue
-
-                reviews = await fetch_steam_app_reviews(
-                    client,
-                    game.steam_app_id,
-                )
-
-            except httpx.HTTPError as exc:
+        # Update ORM objects sequentially.
+        for game, (details, reviews, error) in zip(
+            games,
+            results,
+            strict=True,
+        ):
+            if error is not None:
                 print(
                     f"Failed to fetch metadata for "
-                    f"{game.steam_app_id}: {exc}"
+                    f"{game.steam_app_id}: {error}"
                 )
 
-                # Leave metadata_synced_at as NULL so it gets retried
+                await record_metadata_failure(
+                    db=db,
+                    steam_app_id=game.steam_app_id,
+                    error=error,
+                )
+
+                # Leave metadata_synced_at as NULL for a future run.
                 continue
 
-            finally:
-                await asyncio.sleep(request_delay)  # rate-limiting
+            if details is None:
+                game.metadata_available = False
+                game.metadata_synced_at = datetime.now(tz=UTC)
+
+                await clear_metadata_failure(
+                    db=db,
+                    steam_app_id=game.steam_app_id,
+                )
+
+                continue
 
             normalised_details = normalise_game_details(details)
 
@@ -218,6 +237,81 @@ async def get_steam_metadata(
             game.metadata_available = True
             game.metadata_synced_at = datetime.now(tz=UTC)
 
+            await clear_metadata_failure(
+                db=db,
+                steam_app_id=game.steam_app_id,
+            )
+
         await db.commit()
 
     return total_attempted
+
+async def fetch_one_game(
+        client: httpx.AsyncClient,
+        steam_app_id: int,
+        semaphore: asyncio.Semaphore,
+        request_delay: float,
+       
+) -> tuple[dict | None, dict | None, httpx.HTTPError | None]:
+    async with semaphore:
+        try:
+            details = await fetch_steam_app_details(
+                client,
+                steam_app_id,
+            )
+
+            if details is None:
+                return None, None, None
+
+            reviews = await fetch_steam_app_reviews(
+                client,
+                steam_app_id,
+            )
+
+            return details, reviews, None
+
+        except httpx.HTTPError as exc:
+            return None, None, exc
+
+        finally:
+            await asyncio.sleep(request_delay)
+
+async def record_metadata_failure(
+    db: AsyncSession,
+    steam_app_id: int,
+    error: httpx.HTTPError,
+) -> None:
+    now = datetime.now(tz=UTC)
+    error_message = f"{type(error).__name__}: {error}"[:1000]
+
+    statement = (
+        insert(SteamMetadataFailure)
+        .values(
+            steam_app_id=steam_app_id,
+            attempt_count=1,
+            last_error=error_message,
+            last_failed_at=now,
+        )
+        .on_conflict_do_update(
+            index_elements=[SteamMetadataFailure.steam_app_id],
+            set_={
+                "attempt_count": (
+                    SteamMetadataFailure.attempt_count + 1
+                ),
+                "last_error": error_message,
+                "last_failed_at": now,
+            },
+        )
+    )
+
+    await db.execute(statement)
+
+async def clear_metadata_failure(
+    db: AsyncSession,
+    steam_app_id: int,
+) -> None:
+    await db.execute(
+        delete(SteamMetadataFailure).where(
+            SteamMetadataFailure.steam_app_id == steam_app_id
+        )
+    )

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+import gamerec.services.steam_ingestion as ingestion
 from gamerec.services.steam_ingestion import get_steam_metadata
 
 
@@ -111,6 +112,21 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
+    mock_record_failure = AsyncMock()
+    mock_clear_failure = AsyncMock()
+
+    monkeypatch.setattr(
+        ingestion,
+        "record_metadata_failure",
+        mock_record_failure,
+    )
+
+    monkeypatch.setattr(
+        ingestion,
+        "clear_metadata_failure",
+        mock_clear_failure,
+)
+
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(mock_steam),
         timeout=30,
@@ -121,6 +137,20 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
             batch_size=1,
             max_games=2,
         )
+
+    mock_record_failure.assert_awaited_once()
+
+    assert (
+        mock_record_failure.await_args.kwargs["steam_app_id"]
+        == 10
+    )
+
+    mock_clear_failure.assert_awaited_once()
+
+    assert (
+        mock_clear_failure.await_args.kwargs["steam_app_id"]
+        == 20
+    )
 
     # Both games were attempted, despite the first failing.
     assert attempted == 2

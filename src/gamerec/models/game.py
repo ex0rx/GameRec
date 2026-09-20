@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, Date, DateTime, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from gamerec.db import Base
@@ -63,6 +64,66 @@ class Game(Base):
         nullable=False,
     )
 
+    header_image: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    review_score: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    review_score_desc: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    total_positive: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    total_negative: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    total_reviews: Mapped[int | None] = mapped_column(
+        Integer,
+        nullable=True,
+    )
+
+    genres: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    categories: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )   
+
+    developers: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    publishers: Mapped[list[str] | None] = mapped_column(
+        JSONB,
+        nullable=True,
+    )
+
+    metadata_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    metadata_available: Mapped[bool | None] = mapped_column(
+    Boolean,
+    nullable=True,
+)
+
 class SyncState(Base): # source and last successful sync timestamp for each source (e.g., Steam)
     __tablename__ = "sync_state"
 
@@ -76,4 +137,28 @@ class SyncState(Base): # source and last successful sync timestamp for each sour
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+
+class SteamMetadataFailure(Base):
+    __tablename__ = "steam_metadata_failures"
+
+    steam_app_id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+    )
+
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+
+    last_error: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    last_failed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
     )

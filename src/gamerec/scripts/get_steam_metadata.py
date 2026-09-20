@@ -14,16 +14,15 @@ async def main():
         timeout=30,
         event_hooks={"request": [pacer]},
     ) as client:
-        count = await get_steam_metadata(
+        _ = await get_steam_metadata(
             client=client,
             db=db,
             batch_size=10,
-            max_games=10,
-            request_delay=0,
+            max_games=20,
+            request_delay=0.25,
             max_concurrent_requests=2,
+            max_consecutive_rate_limits=3,
         )
-
-    print(f"Attempted {count} games")
 
 
 if __name__ == "__main__":

@@ -178,3 +178,63 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
 
     # The retry delay was respected for each failed request.
     assert sleep_calls.count(0.5) == 2    
+
+
+import pytest
+
+
+@pytest.mark.asyncio
+async def test_unavailable_game_is_marked_as_checked(monkeypatch):
+    game = SimpleNamespace(
+        id=1,
+        steam_app_id=999999999,
+        metadata_available=None,
+        metadata_synced_at=None,
+    )
+
+    result = SimpleNamespace(
+        scalars=lambda: SimpleNamespace(all=lambda: [game])
+    )
+
+    db = SimpleNamespace(
+        execute=AsyncMock(return_value=result),
+        commit=AsyncMock(),
+    )
+
+    fetch_details = AsyncMock(return_value=None) # return no value
+    fetch_reviews = AsyncMock()
+    clear_failure = AsyncMock()
+    record_failure = AsyncMock()
+
+    monkeypatch.setattr(
+        ingestion, "fetch_steam_app_details", fetch_details
+    )
+    monkeypatch.setattr(
+        ingestion, "fetch_steam_app_reviews", fetch_reviews
+    )
+    monkeypatch.setattr(
+        ingestion, "clear_metadata_failure", clear_failure
+    )
+    monkeypatch.setattr(
+        ingestion, "record_metadata_failure", record_failure
+    )
+
+    async with httpx.AsyncClient() as client:
+        attempted = await ingestion.get_steam_metadata(
+            db=db,
+            client=client,
+            batch_size=1,
+            max_games=1,
+            request_delay=0,
+            max_concurrent_requests=1,
+            max_consecutive_rate_limits=3,
+        )
+
+    assert attempted == 1
+    assert game.metadata_available is False
+    assert game.metadata_synced_at is not None
+
+    fetch_reviews.assert_not_awaited()
+    record_failure.assert_not_awaited()
+    clear_failure.assert_awaited_once()
+    db.commit.assert_awaited_once()

@@ -1,4 +1,5 @@
 import asyncio
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -138,15 +139,24 @@ async def get_steam_metadata(
     max_games: int | None = None,
     request_delay: float = 0.5,
     max_concurrent_requests: int = 2,
+    max_consecutive_rate_limits: int = 3,
 ) -> int:
     if request_delay < 0:
         raise ValueError("request_delay must be non-negative")
     if max_concurrent_requests < 1:
         raise ValueError("max_concurrent_requests must be at least 1")
+    if max_consecutive_rate_limits < 1:
+        raise ValueError("max_consecutive_rate_limits must be at least 1")
 
     semaphore = asyncio.Semaphore(max_concurrent_requests)
     last_seen_id = 0
     total_attempted = 0
+    total_succeeded = 0
+    total_unavailable = 0
+    total_failed = 0
+    started_at = time.perf_counter()
+    conscecutive_rate_limits = 0
+    stopped_due_to_rate_limit = False
 
     while True:
         if max_games is not None:
@@ -197,6 +207,21 @@ async def get_steam_metadata(
             strict=True,
         ):
             if error is not None:
+                total_failed += 1
+
+                is_rate_limited = (
+                    isinstance(error, httpx.HTTPStatusError)
+                    and error.response.status_code == 429
+                )
+
+                if is_rate_limited:
+                    conscecutive_rate_limits += 1
+
+                    if conscecutive_rate_limits >= max_consecutive_rate_limits:
+                        stopped_due_to_rate_limit = True
+                else:
+                    conscecutive_rate_limits = 0
+
                 print(
                     f"Failed to fetch metadata for "
                     f"{game.steam_app_id}: {error}"
@@ -211,7 +236,10 @@ async def get_steam_metadata(
                 # Leave metadata_synced_at as NULL for a future run.
                 continue
 
+            conscecutive_rate_limits = 0
+
             if details is None:
+                total_unavailable += 1
                 game.metadata_available = False
                 game.metadata_synced_at = datetime.now(tz=UTC)
 
@@ -241,9 +269,42 @@ async def get_steam_metadata(
                 db=db,
                 steam_app_id=game.steam_app_id,
             )
+            total_succeeded += 1
+
 
         await db.commit()
+        print(
+            f"Progress: {total_attempted} attempted | "
+            f"{total_succeeded} succeeded | "
+            f"{total_unavailable} unavailable | "
+            f"{total_failed} failed"
+        )
 
+        if stopped_due_to_rate_limit:
+            print(
+                f"Stopping due to {conscecutive_rate_limits} "
+                f"consecutive rate limit errors."
+            )
+            break
+
+
+    elapsed = time.perf_counter() - started_at
+    throughput = total_attempted / elapsed if elapsed > 0 else 0
+    stop_reason = "rate limit" if stopped_due_to_rate_limit else "Run completed"
+
+
+
+    print(
+        f"\nEnrichment complete | "
+        f"Reason: {stop_reason} | "
+        f"Attempted: {total_attempted} | "
+        f"Succeeded: {total_succeeded} | "
+        f"Unavailable: {total_unavailable} | "
+        f"Failed: {total_failed} | "
+        f"Elapsed: {elapsed:.1f}s | "
+        f"Throughput: {throughput:.2f} games/s"
+    )        
+         
     return total_attempted
 
 async def fetch_one_game(

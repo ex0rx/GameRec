@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from gamerec.core.config import settings
 from gamerec.db import Base
-from gamerec.models.game import Game  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

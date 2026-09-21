@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str
     steam_api_key: str
+    steamid64_test: str | None = None
 
     model_config = SettingsConfigDict(
         env_file=".env",

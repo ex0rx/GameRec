@@ -13,7 +13,9 @@ from gamerec.integrations.steam import (
     fetch_steam_games,
     normalise_game_details,
 )
-from gamerec.models.game import Game, SteamMetadataFailure, SyncState
+from gamerec.models.game import Game
+from gamerec.models.steam_metadata_failure import SteamMetadataFailure
+from gamerec.models.sync_state import SyncState
 
 
 async def upsert_steam_games(
@@ -58,6 +60,7 @@ async def upsert_steam_games(
 
 async def ingest_steam_catalogue(
     db: AsyncSession,
+    client: httpx.AsyncClient,
     page_size: int = 1000,
     max_pages: int | None = None,
     if_modified_since: int | None = None,
@@ -80,6 +83,7 @@ async def ingest_steam_catalogue(
             break
 
         steam_games = await fetch_steam_games( # fetch page_size number of games greater than last_appid
+            client=client,
             last_appid=last_appid,
             max_results=page_size,
             if_modified_since=if_modified_since,

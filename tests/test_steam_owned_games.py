@@ -1,0 +1,186 @@
+"""Owned-library contract tests: synthetic data, no Steam or database access."""
+
+from unittest.mock import AsyncMock
+
+import httpx
+import pytest
+
+from gamerec.integrations import steam
+
+
+def test_normalise_visible_library_preserves_optional_data():
+    games = [
+        {"appid": 10, "name": "Example Game", "playtime_forever": 0},
+        {"appid": 20},
+    ]
+
+    status, count, result = steam.normalise_owned_games(
+        {"response": {"game_count": 2, "games": games}}
+    )
+
+    assert (status, count, result) == ("available", 2, games)
+    # Missing playtime must not silently become zero.
+    assert result[0]["playtime_forever"] == 0
+    assert "playtime_forever" not in result[1]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [{"game_count": 0}, {"game_count": 0, "games": []}],
+    ids=["omitted-games", "explicit-empty-games"],
+)
+def test_normalise_explicitly_empty_library(response):
+    assert steam.normalise_owned_games({"response": response}) == ("available", 0, [])
+
+
+def test_normalise_unavailable_library_is_not_reported_as_empty():
+    assert steam.normalise_owned_games({"response": {}}) == ("unavailable", None, [])
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        pytest.param({}, id="missing-envelope"),
+        pytest.param({"response": None}, id="null-envelope"),
+        pytest.param({"response": []}, id="list-envelope"),
+        pytest.param({"response": {"games": []}}, id="missing-count"),
+        pytest.param({"response": {"game_count": True}}, id="boolean-count"),
+        pytest.param({"response": {"game_count": -1}}, id="negative-count"),
+        pytest.param({"response": {"game_count": "0"}}, id="string-count"),
+        pytest.param({"response": {"game_count": 1}}, id="missing-games"),
+        pytest.param({"response": {"game_count": 0, "games": None}}, id="null-games"),
+        pytest.param({"response": {"game_count": 2, "games": []}}, id="count-mismatch"),
+        pytest.param(
+            {"response": {"game_count": 1, "games": [None]}}, id="invalid-entry"
+        ),
+    ],
+)
+def test_normalise_rejects_malformed_library(payload):
+    with pytest.raises(ValueError):
+        steam.normalise_owned_games(payload)
+
+
+@pytest.mark.parametrize("appid", [None, True, 0, -1, "10"])
+def test_normalise_rejects_invalid_app_id(appid):
+    with pytest.raises(ValueError, match="appid"):
+        steam.normalise_owned_games(
+            {"response": {"game_count": 1, "games": [{"appid": appid}]}}
+        )
+
+
+def test_normalise_rejects_missing_app_id():
+    with pytest.raises(ValueError, match="appid"):
+        steam.normalise_owned_games({"response": {"game_count": 1, "games": [{}]}})
+
+
+@pytest.fixture
+def fake_steam_key(monkeypatch):
+    # Never put the configured real API key into mocked requests or failures.
+    monkeypatch.setattr(steam.settings, "steam_api_key", "test-key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_steam_key")
+@pytest.mark.parametrize("include_info, include_free", [(True, True), (False, False)])
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        (
+            {"response": {"game_count": 1, "games": [{"appid": 10}]}},
+            ("available", 1, [{"appid": 10}]),
+        ),
+        ({"response": {"game_count": 0}}, ("available", 0, [])),
+        ({"response": {}}, ("unavailable", None, [])),
+    ],
+    ids=["visible", "empty", "unavailable"],
+)
+async def test_fetch_and_normalise_library(
+    include_info, include_free, payload, expected
+):
+    def handler(request):
+        assert request.method == "GET"
+        assert request.url.host == "api.steampowered.com"
+        assert request.url.path == "/IPlayerService/GetOwnedGames/v1/"
+        assert dict(request.url.params) == {
+            "key": "test-key",
+            "steamid": "synthetic-user",
+            "include_appinfo": str(int(include_info)),
+            "include_played_free_games": str(int(include_free)),
+        }
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await steam.fetch_steam_owned_games(
+            client, "synthetic-user", include_info, include_free
+        )
+
+    assert result == payload
+    assert steam.normalise_owned_games(result) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_steam_key")
+@pytest.mark.parametrize("payload", [[], None, {}, "unexpected"])
+async def test_fetch_rejects_invalid_envelope(payload):
+    def handler(request):
+        # Explicit null bytes avoid treating json=None as an absent body.
+        if payload is None:
+            return httpx.Response(200, content=b"null")
+        return httpx.Response(200, json=payload)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(ValueError):
+            await steam.fetch_steam_owned_games(client, "synthetic-user")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_steam_key")
+@pytest.mark.parametrize("failure", [429, 503, "timeout"])
+@pytest.mark.parametrize("recover", [True, False], ids=["recovery", "exhaustion"])
+async def test_fetch_retries_transient_failures(monkeypatch, failure, recover):
+    sleep = AsyncMock()
+    monkeypatch.setattr(steam.asyncio, "sleep", sleep)
+    attempts = 0
+    payload = {"response": {"game_count": 0}}
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        if recover and attempts == 2:
+            return httpx.Response(200, json=payload)
+        if failure == "timeout":
+            raise httpx.ReadTimeout("Synthetic timeout", request=request)
+        return httpx.Response(failure, headers={"Retry-After": "3"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        if recover:
+            assert (
+                await steam.fetch_steam_owned_games(client, "synthetic-user") == payload
+            )
+        else:
+            error = httpx.ReadTimeout if failure == "timeout" else httpx.HTTPStatusError
+            with pytest.raises(error):
+                await steam.fetch_steam_owned_games(client, "synthetic-user")
+
+    assert attempts == (2 if recover else 3)
+    assert sleep.await_count == attempts - 1
+    if failure == 429:
+        assert all(call.args[0] >= 3 for call in sleep.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("fake_steam_key")
+async def test_fetch_does_not_retry_forbidden_response():
+    attempts = 0
+
+    def handler(request):
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(403)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await steam.fetch_steam_owned_games(client, "synthetic-user")
+
+    assert exc_info.value.response.status_code == 403
+    assert attempts == 1

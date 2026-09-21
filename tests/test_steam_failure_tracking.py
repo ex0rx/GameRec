@@ -3,7 +3,7 @@ import pytest
 from sqlalchemy import select
 
 from gamerec.db import SessionLocal
-from gamerec.models.game import SteamMetadataFailure
+from gamerec.models.steam_metadata_failure import SteamMetadataFailure
 from gamerec.services.steam_ingestion import (
     clear_metadata_failure,
     record_metadata_failure,

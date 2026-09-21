@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import date, datetime
+from typing import Literal
 
 import httpx
 
@@ -21,6 +22,10 @@ STEAM_APP_REVIEW_API_URL = (
     "https://store.steampowered.com/appreviews/{steam_app_id}"
 )
 
+STEAM_OWNED_GAMES_API_URL = (
+    "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
+)
+
 async def fetch_steam_games(
     client: httpx.AsyncClient,
     last_appid: int = 0,
@@ -35,14 +40,14 @@ async def fetch_steam_games(
         "include_hardware": False,
         "last_appid": last_appid,
         "max_results": max_results,
-    }
-    params = {
-            "key": settings.steam_api_key,
-            "input_json": json.dumps(input_json),
-        }
-    
+    }  
     if if_modified_since is not None:
         input_json["if_modified_since"] = if_modified_since
+
+    params = {
+                "key": settings.steam_api_key,
+                "input_json": json.dumps(input_json),
+            }
 
     response = await client.get(
         STEAM_API_URL,
@@ -184,3 +189,74 @@ async def get_with_retry(
         await asyncio.sleep(delay)
 
     raise RuntimeError("Retry loop ended unexpectedly")
+
+async def fetch_steam_owned_games(
+    client: httpx.AsyncClient,
+    steamid64: str,
+    include_appinfo: bool = True,
+    include_played_free_games: bool = True,
+) -> dict:
+    url = STEAM_OWNED_GAMES_API_URL
+    params = {
+        "key": settings.steam_api_key,
+        "steamid": steamid64,
+        "include_appinfo": int(include_appinfo),
+        "include_played_free_games": int(include_played_free_games),
+    }
+
+    response = await get_with_retry(client, url, params)
+    payload = response.json()
+
+    if not isinstance(payload, dict) or "response" not in payload:
+        raise ValueError("Expected a JSON object from Steam")
+
+    return payload
+
+def normalise_owned_games(
+    payload: dict,
+) -> tuple[Literal["available", "unavailable"], int | None, list[dict]]:
+    response = payload.get("response")
+
+    if not isinstance(response, dict):
+        raise ValueError("Expected 'response' to be a dictionary")
+
+    if response == {}:
+        return "unavailable", None, []
+
+    reported_game_count = response.get("game_count")
+
+    if (
+        isinstance(reported_game_count, bool)
+        or not isinstance(reported_game_count, int)
+        or reported_game_count < 0
+    ):
+        raise ValueError("Expected 'game_count' to be a non-negative integer")
+
+    if "games" not in response:
+        if reported_game_count == 0:
+            return "available", 0, []
+
+        raise ValueError("Expected 'games' when 'game_count' is positive")
+
+    games = response["games"]
+
+    if not isinstance(games, list):
+        raise ValueError("Expected 'games' to be a list")
+
+    if len(games) != reported_game_count:
+        raise ValueError("'game_count' does not match the number of games")
+
+    for game in games:
+        if not isinstance(game, dict):
+            raise ValueError("Expected each game to be a dictionary")
+
+        appid = game.get("appid")
+
+        if isinstance(appid, bool) or not isinstance(appid, int) or appid <= 0:
+            raise ValueError("Expected each game to have a positive integer 'appid'")
+
+    return "available", reported_game_count, games
+
+   
+
+    

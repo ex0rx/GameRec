@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, Date, DateTime, Integer, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -123,42 +123,3 @@ class Game(Base):
     Boolean,
     nullable=True,
 )
-
-class SyncState(Base): # source and last successful sync timestamp for each source (e.g., Steam)
-    __tablename__ = "sync_state"
-
-    source: Mapped[str | None] = mapped_column(
-        String(255),
-        unique=True,
-        nullable=False,
-        primary_key=True,
-    )
-
-    last_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
-        nullable=True,
-    )
-
-class SteamMetadataFailure(Base):
-    __tablename__ = "steam_metadata_failures"
-
-    steam_app_id: Mapped[int] = mapped_column(
-        Integer,
-        primary_key=True,
-    )
-
-    attempt_count: Mapped[int] = mapped_column(
-        Integer,
-        nullable=False,
-        default=0,
-    )
-
-    last_error: Mapped[str | None] = mapped_column(
-        Text,
-        nullable=True,
-    )
-
-    last_failed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        nullable=False,
-    )

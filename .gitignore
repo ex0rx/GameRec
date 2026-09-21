@@ -26,3 +26,13 @@ Thumbs.db
 
 # Logs
 *.log
+
+# agents
+.agents
+
+# docs
+docs
+
+# md
+AGENTS.md
+SETUP.md

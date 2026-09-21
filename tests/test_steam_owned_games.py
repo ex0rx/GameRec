@@ -18,10 +18,78 @@ def test_normalise_visible_library_preserves_optional_data():
         {"response": {"game_count": 2, "games": games}}
     )
 
-    assert (status, count, result) == ("available", 2, games)
-    # Missing playtime must not silently become zero.
-    assert result[0]["playtime_forever"] == 0
-    assert "playtime_forever" not in result[1]
+    assert (status, count) == ("available", 2)
+    assert result == [
+        {
+            "steam_app_id": 10,
+            "name": "Example Game",
+            "playtime_forever_minutes": 0,
+            "playtime_2weeks_minutes": 0,
+        },
+        {
+            "steam_app_id": 20,
+            "name": None,
+            "playtime_forever_minutes": None,
+            "playtime_2weeks_minutes": 0,
+        },
+    ]
+    # Normalisation must not mutate the source response.
+    assert games == [
+        {"appid": 10, "name": "Example Game", "playtime_forever": 0},
+        {"appid": 20},
+    ]
+
+
+@pytest.mark.parametrize(
+    "fields, expected_lifetime, expected_recent",
+    [
+        pytest.param(
+            {"playtime_forever": 240, "playtime_2weeks": 30},
+            240,
+            30,
+            id="reported-values",
+        ),
+        pytest.param(
+            {"playtime_forever": 0, "playtime_2weeks": 0},
+            0,
+            0,
+            id="explicit-zero",
+        ),
+        # Omitted recent time is zero under our chosen application policy.
+        pytest.param({"playtime_forever": 240}, 240, 0, id="omitted-recent"),
+        pytest.param({"playtime_2weeks": 30}, None, 30, id="omitted-lifetime"),
+        pytest.param(
+            {"playtime_forever": None, "playtime_2weeks": 30},
+            None,
+            30,
+            id="null-lifetime",
+        ),
+        pytest.param(
+            {"playtime_forever": 240, "playtime_2weeks": None},
+            240,
+            None,
+            id="null-recent",
+        ),
+    ],
+)
+def test_normalise_playtime_values(fields, expected_lifetime, expected_recent):
+    payload = {"response": {"game_count": 1, "games": [{"appid": 10, **fields}]}}
+
+    status, count, games = steam.normalise_owned_games(payload)
+
+    assert (status, count) == ("available", 1)
+    assert games[0]["playtime_forever_minutes"] == expected_lifetime
+    assert games[0]["playtime_2weeks_minutes"] == expected_recent
+
+
+@pytest.mark.parametrize("field", ["playtime_forever", "playtime_2weeks"])
+@pytest.mark.parametrize("value", [True, -1, "30", 1.5])
+def test_normalise_rejects_invalid_playtime(field, value):
+    game = {"appid": 10, "playtime_forever": 240, "playtime_2weeks": 30}
+    game[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        steam.normalise_owned_games({"response": {"game_count": 1, "games": [game]}})
 
 
 @pytest.mark.parametrize(
@@ -86,8 +154,24 @@ def fake_steam_key(monkeypatch):
     "payload, expected",
     [
         (
-            {"response": {"game_count": 1, "games": [{"appid": 10}]}},
-            ("available", 1, [{"appid": 10}]),
+            {
+                "response": {
+                    "game_count": 1,
+                    "games": [{"appid": 10, "playtime_forever": 60}],
+                }
+            },
+            (
+                "available",
+                1,
+                [
+                    {
+                        "steam_app_id": 10,
+                        "name": None,
+                        "playtime_forever_minutes": 60,
+                        "playtime_2weeks_minutes": 0,
+                    }
+                ],
+            ),
         ),
         ({"response": {"game_count": 0}}, ("available", 0, [])),
         ({"response": {}}, ("unavailable", None, [])),

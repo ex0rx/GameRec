@@ -30,6 +30,7 @@ async def main():
     print(f"Library status: {status}")
     print(f"Reported game count: {reported_game_count}")
     print(f"Parsed entries: {len(games)}")
+    print(f"First 5 entries: {games[:5]}")
 
 
 if __name__ == "__main__":

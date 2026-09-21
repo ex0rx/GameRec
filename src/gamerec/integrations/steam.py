@@ -214,7 +214,7 @@ async def fetch_steam_owned_games(
 
 def normalise_owned_games(
     payload: dict,
-) -> tuple[Literal["available", "unavailable"], int | None, list[dict]]:
+) -> tuple[Literal["available", "unavailable"], int | None, list[dict]]:    
     response = payload.get("response")
 
     if not isinstance(response, dict):
@@ -239,6 +239,7 @@ def normalise_owned_games(
         raise ValueError("Expected 'games' when 'game_count' is positive")
 
     games = response["games"]
+    normalised_games = []
 
     if not isinstance(games, list):
         raise ValueError("Expected 'games' to be a list")
@@ -255,7 +256,30 @@ def normalise_owned_games(
         if isinstance(appid, bool) or not isinstance(appid, int) or appid <= 0:
             raise ValueError("Expected each game to have a positive integer 'appid'")
 
-    return "available", reported_game_count, games
+        playtime_forever_minutes = game.get("playtime_forever")
+        playtime_2weeks_minutes = game.get("playtime_2weeks", 0)
+
+        for field, value in (
+            ("playtime_forever", playtime_forever_minutes),
+            ("playtime_2weeks", playtime_2weeks_minutes),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"Expected '{field}' to be a non-negative integer or null"
+                )
+
+        normalised_games.append({   
+            "steam_app_id": appid,
+            "name": game.get("name"),
+            "playtime_forever_minutes": playtime_forever_minutes,
+            "playtime_2weeks_minutes": playtime_2weeks_minutes,
+        })
+
+    return "available", reported_game_count, normalised_games
 
    
 

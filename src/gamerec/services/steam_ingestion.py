@@ -144,7 +144,10 @@ async def get_steam_metadata(
     request_delay: float = 0.5,
     max_concurrent_requests: int = 2,
     max_consecutive_rate_limits: int = 3,
+    steam_app_ids: list[int] | None = None,
 ) -> int:
+    if steam_app_ids is not None and not steam_app_ids:
+        return 0
     if request_delay < 0:
         raise ValueError("request_delay must be non-negative")
     if max_concurrent_requests < 1:
@@ -173,15 +176,17 @@ async def get_steam_metadata(
         else:
             current_batch_size = batch_size
 
-        result = await db.execute(
-            select(Game)
-            .where(
-                Game.metadata_synced_at.is_(None),
-                Game.id > last_seen_id,
-            )
-            .order_by(Game.id)
-            .limit(current_batch_size)
+        query = select(Game).where(
+            Game.metadata_synced_at.is_(None),
+            Game.id > last_seen_id,
         )
+        if steam_app_ids is not None:
+            query = query.where(Game.steam_app_id.in_(steam_app_ids))
+
+        result = await db.execute(
+            query.order_by(Game.id).limit(current_batch_size)
+        )
+
 
         games = result.scalars().all()
 

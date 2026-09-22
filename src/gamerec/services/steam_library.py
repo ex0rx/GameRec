@@ -1,14 +1,13 @@
 from datetime import UTC, datetime
 
+from sqlalchemy import select, update
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gamerec import db
 from gamerec.models.game import Game
 from gamerec.models.user import User
 from gamerec.models.user_game import UserGame
 
-from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert
 
 async def upsert_user_game_library(
     db: AsyncSession,

@@ -218,7 +218,7 @@ def normalise_owned_games(
     response = payload.get("response")
 
     if not isinstance(response, dict):
-        raise ValueError("Expected 'response' to be a dictionary")
+        raise TypeError("Expected 'response' to be a dictionary")
 
     if response == {}:
         return "unavailable", None, []
@@ -242,14 +242,14 @@ def normalise_owned_games(
     normalised_games = []
 
     if not isinstance(games, list):
-        raise ValueError("Expected 'games' to be a list")
+        raise TypeError("Expected 'games' to be a list")
 
     if len(games) != reported_game_count:
         raise ValueError("'game_count' does not match the number of games")
 
     for game in games:
         if not isinstance(game, dict):
-            raise ValueError("Expected each game to be a dictionary")
+            raise TypeError("Expected each game to be a dictionary")
 
         appid = game.get("appid")
 

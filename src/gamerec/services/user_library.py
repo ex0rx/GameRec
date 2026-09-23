@@ -12,7 +12,7 @@ async def get_user_library(
     steamid64: str,
     limit: int = 50,
     offset: int = 0,
-): 
+) -> dict | None: 
     query_user = select(User).where(User.steamid64 == steamid64)
     user_result = await db.execute(query_user)
     user = user_result.scalar_one_or_none()

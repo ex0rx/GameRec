@@ -106,25 +106,35 @@ def test_normalise_unavailable_library_is_not_reported_as_empty():
 
 
 @pytest.mark.parametrize(
-    "payload",
+    "payload, expected_error",
     [
-        pytest.param({}, id="missing-envelope"),
-        pytest.param({"response": None}, id="null-envelope"),
-        pytest.param({"response": []}, id="list-envelope"),
-        pytest.param({"response": {"games": []}}, id="missing-count"),
-        pytest.param({"response": {"game_count": True}}, id="boolean-count"),
-        pytest.param({"response": {"game_count": -1}}, id="negative-count"),
-        pytest.param({"response": {"game_count": "0"}}, id="string-count"),
-        pytest.param({"response": {"game_count": 1}}, id="missing-games"),
-        pytest.param({"response": {"game_count": 0, "games": None}}, id="null-games"),
-        pytest.param({"response": {"game_count": 2, "games": []}}, id="count-mismatch"),
+        pytest.param({}, TypeError, id="missing-envelope"),
+        pytest.param({"response": None}, TypeError, id="null-envelope"),
+        pytest.param({"response": []}, TypeError, id="list-envelope"),
+        pytest.param({"response": {"games": []}}, ValueError, id="missing-count"),
         pytest.param(
-            {"response": {"game_count": 1, "games": [None]}}, id="invalid-entry"
+            {"response": {"game_count": True}}, ValueError, id="boolean-count"
+        ),
+        pytest.param({"response": {"game_count": -1}}, ValueError, id="negative-count"),
+        pytest.param({"response": {"game_count": "0"}}, ValueError, id="string-count"),
+        pytest.param({"response": {"game_count": 1}}, ValueError, id="missing-games"),
+        pytest.param(
+            {"response": {"game_count": 0, "games": None}}, TypeError, id="null-games"
+        ),
+        pytest.param(
+            {"response": {"game_count": 2, "games": []}},
+            ValueError,
+            id="count-mismatch",
+        ),
+        pytest.param(
+            {"response": {"game_count": 1, "games": [None]}},
+            TypeError,
+            id="invalid-entry",
         ),
     ],
 )
-def test_normalise_rejects_malformed_library(payload):
-    with pytest.raises(ValueError):
+def test_normalise_rejects_malformed_library(payload, expected_error):
+    with pytest.raises(expected_error):
         steam.normalise_owned_games(payload)
 
 

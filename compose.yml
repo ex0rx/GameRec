@@ -11,6 +11,19 @@ services:
       db:
         condition: service_healthy
 
+  embeddings:
+    build:
+      context: .
+      dockerfile: Dockerfile.embeddings
+    profiles: [embeddings]
+    env_file:
+      - .env
+    volumes:
+      - embedding_model_cache:/opt/model-cache
+    depends_on:
+      db:
+        condition: service_healthy
+
   db:
     image: postgres:17
     environment:
@@ -31,3 +44,4 @@ services:
 
 volumes:
   postgres_data:
+  embedding_model_cache:

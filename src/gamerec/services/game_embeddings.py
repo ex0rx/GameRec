@@ -7,12 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamerec.core.config import settings
 from gamerec.ml.game_text import build_game_embedding_text
+from gamerec.ml.similarity import cosine_similarity
 from gamerec.models.game import Game
 from gamerec.models.game_embedding import GameEmbedding
 
 EXPECTED_DIMENSIONS = 384
-MODEL_NAME = settings.embeddings_model_name
-MODEL_REVISION = settings.embeddings_model_revision
 
 async def generate_game_embeddings(
     db: AsyncSession,
@@ -38,8 +37,8 @@ async def generate_game_embeddings(
                         GameEmbedding.input_hash)
                         .where(
                             GameEmbedding.steam_app_id.in_(steam_app_ids),
-                            GameEmbedding.model_name == MODEL_NAME,
-                            GameEmbedding.model_revision == MODEL_REVISION,
+                            GameEmbedding.model_name == settings.embeddings_model_name,
+                            GameEmbedding.model_revision == settings.embeddings_model_revision,
                         ))
     existing_embeddings_result = await db.execute(existing_embeddings_statement)
     existing_embeddings = {
@@ -217,5 +216,3 @@ async def process_game_embeddings(
         "generated": generated,
         "skipped": processed - generated,
     }
-    
-    

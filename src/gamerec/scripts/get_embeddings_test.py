@@ -1,39 +1,29 @@
-"""Run the bounded, read-only embedding verification job."""
-
 import asyncio
 
-from gamerec.db import SessionLocal, engine
-from gamerec.services.game_embeddings import generate_game_embeddings
+from sentence_transformers import SentenceTransformer
 
-STEAM_APP_IDS = [105600, 730]
-EXPECTED_DIMENSIONS = 384
+from gamerec.core.config import settings
+from gamerec.db import SessionLocal, engine
+from gamerec.services.game_embeddings import process_game_embeddings
 
 
 async def main() -> None:
     try:
+        model = SentenceTransformer(
+            settings.embeddings_model_name,
+            revision=settings.embeddings_model_revision,
+        )
+
         async with SessionLocal() as db:
-            embeddings = await generate_game_embeddings(
-                db=db, steam_app_ids=STEAM_APP_IDS
+            stats = await process_game_embeddings(
+                db=db,
+                model=model,
+                batch_size=16,
+                max_games=100,
             )
 
-        for steam_app_id in STEAM_APP_IDS:
-            vector = embeddings.get(steam_app_id)
-            if vector is None:
-                print(
-                    f"Steam App ID: {steam_app_id}: no embedding returned "
-                    "(game missing from database or no usable embedding text)."
-                )
-                continue
+        print(stats)
 
-            dimensions = len(vector)
-            print(f"Steam App ID: {steam_app_id}, Embedding dimensions: {dimensions}")
-            if dimensions != EXPECTED_DIMENSIONS:
-                raise ValueError(
-                    f"Expected {EXPECTED_DIMENSIONS} dimensions for {steam_app_id}, "
-                    f"got {dimensions}"
-                )
-
-        print(f"Generated {len(embeddings)}/{len(STEAM_APP_IDS)} requested embeddings.")
     finally:
         await engine.dispose()
 

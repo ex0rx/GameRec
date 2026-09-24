@@ -1,5 +1,6 @@
 from gamerec.models.game import Game
 
+
 def build_game_embedding_text(
     game: Game
 )-> str:

@@ -5,6 +5,7 @@ from gamerec.core.config import settings
 from gamerec.ml.similarity import cosine_similarity
 from gamerec.models.game_embedding import GameEmbedding
 
+
 async def find_similar_games(
         db: AsyncSession,
         steam_app_id: int,

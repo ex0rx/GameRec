@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamerec.core.config import settings
 from gamerec.ml.game_text import build_game_embedding_text
-from gamerec.ml.similarity import cosine_similarity
 from gamerec.models.game import Game
 from gamerec.models.game_embedding import GameEmbedding
 

@@ -1,9 +1,9 @@
 import asyncio
 
+from gamerec.core.config import settings
 from gamerec.db import SessionLocal
 from gamerec.integrations.qdrant import get_qdrant_client
 from gamerec.services.vector_sync import sync_embeddings_to_qdrant
-from gamerec.core.config import settings
 
 
 async def main() -> None:
@@ -20,7 +20,7 @@ async def main() -> None:
 
             print(response)
 
-            points, next_page = await client.scroll(
+            points, _ = await client.scroll(
             collection_name=settings.qdrant_game_collection,
             limit=5,
             with_vectors=True,

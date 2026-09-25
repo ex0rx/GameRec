@@ -2,10 +2,10 @@ import asyncio
 
 from sqlalchemy import select
 
-from gamerec.core.config import settings
 from gamerec.db import SessionLocal, engine
-from gamerec.services.game_similarity import find_similar_games
 from gamerec.models.game import Game
+from gamerec.services.game_similarity import find_similar_games
+
 
 async def main() -> None:
     try:

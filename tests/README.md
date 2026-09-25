@@ -87,3 +87,39 @@ container; stopping the container removes all its temporary storage.
 ```
 
 Mypy is not currently configured in the project.
+
+## Phase 5F embedding coverage
+
+Install the optional inference dependency along with the test tools when setting
+up a checkout: `uv sync --dev --group embeddings`. Tests use a deterministic,
+text-dependent fake encoder with 384-dimensional normalized vectors. They never
+construct a real model or download weights; Hugging Face offline settings are
+also enabled. Embedding model settings are synthetic test values.
+
+Using the disposable PostgreSQL server described above, run the focused suite:
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration \
+  tests/test_game_text.py tests/test_similarity.py tests/test_game_embeddings.py \
+  tests/integration/test_game_embeddings.py -q
+```
+
+- Existing text tests cover missing/blank metadata and reproducibility.
+- Unit tests cover cosine scores, empty/mismatched/zero vectors, empty generation
+  and persistence, invalid dimensions, missing hashes, inference result-count
+  mismatches, and pipeline limit validation.
+- Database tests cover new/unchanged/modified games, hashes and app-ID mapping,
+  model/revision changes, insert/upsert and retrieval, revision isolation,
+  eligibility and cursor pagination, batch and total limits, repeat-run counters,
+  transaction rollback and rerun recovery, and similarity ranking and filtering.
+- `max_games` counts eligible games visited, including unchanged games. Recovery
+  starts scanning from the beginning and skips matching hashes; there is no
+  persistent cursor or automatic retry within a failed run.
+
+Known behavior outside this slice: cosine similarity does not reject non-finite
+components; negative `top_k` uses Python slicing rather than validation; ties
+have no explicit secondary ordering. SQL eligibility trims ordinary spaces,
+not all whitespace. The generation helper itself does not validate vector
+width (persistence does), and the database has no array-width constraint. Tests
+validate application transactions and model metadata, not migration upgrades or
+semantic quality of a real embedding model.

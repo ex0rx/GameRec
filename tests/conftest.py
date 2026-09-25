@@ -12,6 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 os.environ.update(
     DATABASE_URL="postgresql+asyncpg://unused:unused@127.0.0.1:1/unused",
     STEAM_API_KEY="synthetic-key",
+    EMBEDDINGS_MODEL_NAME="synthetic-model",
+    EMBEDDINGS_MODEL_REVISION="synthetic-revision",
+    HF_HUB_OFFLINE="1",
+    TRANSFORMERS_OFFLINE="1",
     STEAMID64_TEST="synthetic-user",
 )
 
@@ -56,3 +60,35 @@ def fake_db():
     transaction.__aexit__.return_value = False
     db.begin = Mock(return_value=transaction)
     return db
+
+
+@pytest.fixture
+def fake_embedding_model(monkeypatch):
+    """Text-dependent, normalized vectors without loading any model weights."""
+    import hashlib
+    from array import array
+    from math import sqrt
+
+    from sentence_transformers import SentenceTransformer
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Embedding tests must not construct a real model")
+
+    monkeypatch.setattr(SentenceTransformer, "__init__", forbidden)
+
+    class FakeModel:
+        def __init__(self):
+            self.calls = []
+
+        def encode(self, texts, *, normalize_embeddings, batch_size):
+            assert normalize_embeddings is True
+            assert batch_size == 32
+            self.calls.append(list(texts))
+            result = []
+            for text in texts:
+                values = list(hashlib.sha256(text.encode()).digest()) * 12
+                norm = sqrt(sum(value * value for value in values))
+                result.append(array("d", (value / norm for value in values)))
+            return result
+
+    return FakeModel()

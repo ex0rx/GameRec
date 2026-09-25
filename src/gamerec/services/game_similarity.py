@@ -7,11 +7,11 @@ from gamerec.models.game_embedding import GameEmbedding
 
 
 async def find_similar_games(
-        db: AsyncSession,
-        steam_app_id: int,
-        top_k: int = 5,
+    db: AsyncSession,
+    steam_app_id: int,
+    top_k: int = 5,
 ) -> list[tuple[int, float]]:
-    
+
     game_embedding_statement = select(GameEmbedding).where(
         GameEmbedding.steam_app_id == steam_app_id,
         GameEmbedding.model_name == settings.embeddings_model_name,
@@ -24,15 +24,14 @@ async def find_similar_games(
     if not game_embedding:
         return []
 
-    similarity_statement = (select(
-                                GameEmbedding.steam_app_id,
-                                GameEmbedding.embedding,)
-                            .where(
-                                GameEmbedding.steam_app_id != steam_app_id,
-                                GameEmbedding.model_name == settings.embeddings_model_name,
-                                GameEmbedding.model_revision == settings.embeddings_model_revision,
-                            )   
-                        )
+    similarity_statement = select(
+        GameEmbedding.steam_app_id,
+        GameEmbedding.embedding,
+    ).where(
+        GameEmbedding.steam_app_id != steam_app_id,
+        GameEmbedding.model_name == settings.embeddings_model_name,
+        GameEmbedding.model_revision == settings.embeddings_model_revision,
+    )
 
     similarity_result = await db.execute(similarity_statement)
     candidates = similarity_result.all()

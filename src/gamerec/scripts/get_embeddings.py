@@ -18,8 +18,8 @@ async def main() -> None:
             stats = await process_game_embeddings(
                 db=db,
                 model=model,
-                batch_size=16,
-                max_games=100,
+                batch_size=64,
+                max_games=None,
             )
 
         print(stats)

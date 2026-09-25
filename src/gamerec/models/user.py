@@ -25,7 +25,3 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-
-
-
-    

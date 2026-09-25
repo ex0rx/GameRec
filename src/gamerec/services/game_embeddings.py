@@ -12,6 +12,7 @@ from gamerec.models.game_embedding import GameEmbedding
 
 EXPECTED_DIMENSIONS = 384
 
+
 async def generate_game_embeddings(
     db: AsyncSession,
     steam_app_ids: list[int],
@@ -20,10 +21,8 @@ async def generate_game_embeddings(
 
     if not steam_app_ids:
         return {}, {}
-    
-    games_statement = select(Game).where(
-                    Game.steam_app_id.in_(steam_app_ids)
-                    )
+
+    games_statement = select(Game).where(Game.steam_app_id.in_(steam_app_ids))
 
     games_result = await db.execute(games_statement)
     games = games_result.scalars().all()
@@ -31,14 +30,13 @@ async def generate_game_embeddings(
     if not games:
         return {}, {}
 
-    existing_embeddings_statement = (select(
-                        GameEmbedding.steam_app_id,
-                        GameEmbedding.input_hash)
-                        .where(
-                            GameEmbedding.steam_app_id.in_(steam_app_ids),
-                            GameEmbedding.model_name == settings.embeddings_model_name,
-                            GameEmbedding.model_revision == settings.embeddings_model_revision,
-                        ))
+    existing_embeddings_statement = select(
+        GameEmbedding.steam_app_id, GameEmbedding.input_hash
+    ).where(
+        GameEmbedding.steam_app_id.in_(steam_app_ids),
+        GameEmbedding.model_name == settings.embeddings_model_name,
+        GameEmbedding.model_revision == settings.embeddings_model_revision,
+    )
     existing_embeddings_result = await db.execute(existing_embeddings_statement)
     existing_embeddings = {
         steam_app_id: input_hash
@@ -48,7 +46,6 @@ async def generate_game_embeddings(
     game_ids: list[int] = []
     game_texts: list[str] = []
     input_hashes: dict[int, str] = {}
-
 
     for game in games:
         text = build_game_embedding_text(game)
@@ -69,21 +66,22 @@ async def generate_game_embeddings(
         return {}, {}
 
     embeddings = model.encode(
-                game_texts,
-                normalize_embeddings=True,
-                batch_size=32,
-                )
+        game_texts,
+        normalize_embeddings=True,
+        batch_size=32,
+    )
 
     embeddings_dict = {
         steam_app_id: embedding.tolist()
-            for steam_app_id, embedding in zip(
-                game_ids, 
-                embeddings,
-                strict=True,
-            )
+        for steam_app_id, embedding in zip(
+            game_ids,
+            embeddings,
+            strict=True,
+        )
     }
 
     return embeddings_dict, input_hashes
+
 
 async def save_game_embeddings(
     db: AsyncSession,
@@ -98,8 +96,7 @@ async def save_game_embeddings(
     for steam_app_id, embedding in embeddings.items():
         if len(embedding) != EXPECTED_DIMENSIONS:
             raise ValueError(
-                f"Invalid embedding dimensions for {steam_app_id}: "
-                f"{len(embedding)}"
+                f"Invalid embedding dimensions for {steam_app_id}: {len(embedding)}"
             )
 
     game_embedding_rows = [
@@ -116,21 +113,22 @@ async def save_game_embeddings(
     statement = insert(GameEmbedding).values(game_embedding_rows)
 
     statement = statement.on_conflict_do_update(
-            index_elements=[
-                GameEmbedding.steam_app_id,
-                GameEmbedding.model_name,
-                GameEmbedding.model_revision,
-            ],
-            set_={
-                "input_hash": statement.excluded.input_hash,
-                "embedding": statement.excluded.embedding,
-                "created_at": func.now(),
-            },
-        )
+        index_elements=[
+            GameEmbedding.steam_app_id,
+            GameEmbedding.model_name,
+            GameEmbedding.model_revision,
+        ],
+        set_={
+            "input_hash": statement.excluded.input_hash,
+            "embedding": statement.excluded.embedding,
+            "created_at": func.now(),
+        },
+    )
     await db.execute(statement)
 
     return len(game_embedding_rows)
-    
+
+
 async def get_next_embedding_batch(
     db: AsyncSession,
     last_game_id: int = 0,
@@ -208,7 +206,6 @@ async def process_game_embeddings(
         processed += len(games_batch)
         generated += saved_count
         last_game_id = games_batch[-1].id
-
 
     return {
         "processed": processed,

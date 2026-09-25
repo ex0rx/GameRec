@@ -22,6 +22,4 @@ class RequestPacer:
             if delay > 0:
                 await asyncio.sleep(delay)
 
-            self.next_request_at = (
-                loop.time() + self.min_interval
-            )
+            self.next_request_at = loop.time() + self.min_interval

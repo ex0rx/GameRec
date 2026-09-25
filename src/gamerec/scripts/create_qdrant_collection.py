@@ -1,8 +1,9 @@
 import asyncio
 
+from gamerec.core.config import settings
 from gamerec.integrations.qdrant import get_qdrant_client
 from gamerec.services.vector_store import ensure_game_collection
-from gamerec.core.config import settings
+
 
 async def main() -> None:
     client = get_qdrant_client()

@@ -242,10 +242,12 @@ embedding model/revision, rebuild without changing the active search collection:
 
 ```python
 from gamerec.services.vector_store import (
-    ensure_game_collection, ensure_game_payload_indexes,
+    ensure_game_collection,
+    ensure_game_payload_indexes,
 )
 from gamerec.services.vector_sync import (
-    sync_embeddings_to_qdrant, prune_embeddings_from_qdrant,
+    sync_embeddings_to_qdrant,
+    prune_embeddings_from_qdrant,
 )
 
 name = "game_embeddings_v2"
@@ -273,7 +275,10 @@ Pruning is explicit and scoped to one compatible collection:
 preview = await prune_embeddings_from_qdrant(db, client, collection_name=name)
 # When intended, apply the same comparison against the current PostgreSQL set:
 result = await prune_embeddings_from_qdrant(
-    db, client, collection_name=name, dry_run=False,
+    db,
+    client,
+    collection_name=name,
+    dry_run=False,
 )
 ```
 
@@ -315,3 +320,113 @@ counts. Tests use disposable PostgreSQL and in-memory Qdrant; no model downloads
 A separate disposable-server smoke check also verified persisted collection
 metadata, repeat-safe setup, revision-mismatch rejection, new-version creation,
 and deletion scoped to the new version while preserving the old collection.
+
+## Phase 6G retrieval benchmark
+
+Run against existing configured PostgreSQL embeddings and a running Qdrant server:
+
+```bash
+docker compose exec -T api python -m gamerec.scripts.benchmark_retrieval \
+  --sizes 1000 10000 50000 --top-k 10 --warmups 2 --repeats 10 \
+  --output /app/tests/phase6g-benchmark.json
+```
+
+`--queries` accepts public Steam **app** IDs. Defaults span shooters (550, 730,
+440), puzzle (620, 400), strategy (570), RPG (292030, 1245620), sandbox (105600)
+and simulation (413150). These are a fixed convenience sample, not a statistically
+representative relevance evaluation. Missing embeddings for the configured model
+and revision are reported and skipped; duplicate IDs run once. Queries may live
+outside a smaller candidate prefix, keeping the query set constant across sizes.
+
+Methodology:
+
+- A single read-only PostgreSQL SELECT loads the largest requested prefix ordered
+  by app ID, plus any query embeddings outside that prefix. Each size uses its
+  deterministic prefix; no embeddings are generated or changed. Requested sizes
+  are capped at available rows, and duplicate actual sizes run only once.
+- Each run creates a fresh `gamerec_benchmark_<uuid>` collection with exactly those
+  candidate vectors and cosine distance. Batched upserts wait for application;
+  collection readiness is checked with a bounded timeout and exact point count.
+  The collection is deleted in `finally`, including on retrieval failure. The
+  configured game collection is never touched. Hard process termination or a
+  server outage can still leave a temporary collection behind; manual cleanup must
+  target only that UUID-named benchmark collection.
+- This is a **retrieval-kernel benchmark**, not timing the two application service
+  wrappers. The exact side reuses the unchanged Phase 5 `cosine_similarity`, scans
+  all candidates, and performs the same descending full sort. Integration coverage
+  checks parity with `game_similarity.find_similar_games`. PostgreSQL fetch and
+  deserialization happen once outside timing, so this deliberately gives the
+  brute-force side a resident snapshot. It does not measure the Phase 5 service's
+  per-call SQL cost.
+- Both sides start with the same resident query vector and exclude its app ID.
+  Qdrant uses `query_points` with the same ID-exclusion filter as current retrieval,
+  with server-default search parameters. Its timing includes request serialization,
+  network/service overhead and response parsing; target lookup, collection
+  validation, names/payloads, setup and teardown are excluded on both sides.
+- Each query gets two untimed warmups and ten timed repeats per method by default.
+  Method order alternates by repetition. `time.perf_counter()` measures seconds;
+  output is milliseconds. Median and nearest-rank p95 are pooled across all
+  query/repeat samples per method, not averages of per-query percentiles.
+- Overlap is set intersection divided by effective k: `min(top_k, candidates
+  after self-exclusion)`. Queries with no candidates are reported and excluded
+  from summaries. Average overlap averages repeats, then queries. Exact ties keep
+  app-ID order; Qdrant tie ordering and float32 normalization may differ.
+- Optional JSON includes raw samples, per-query summaries, overlap per repeat,
+  last-repeat rankings, shared-ID rank deltas (Qdrant rank minus exact rank),
+  corpus/query hashes, versions and collection/index configuration. It stores no
+  embedding vectors or connection credentials. Matching hashes identify the input
+  snapshot; rerunning after embeddings change is a different experiment.
+
+Actual server results are recorded in [phase6g-benchmark.json](phase6g-benchmark.json).
+The run used the existing 384-dimensional `all-MiniLM-L6-v2` vectors, pinned
+revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`, Python 3.13.15, Qdrant server
+and client 1.19.1, via the Compose API container on WSL2. See the artifact's UTC
+capture time. Five available queries were 550, 570, 730, 292030 and 105600;
+620, 400, 440, 413150 and 1245620 were missing. Each row contains 50 measured
+calls per method, top-k 10, after two warmups per query/method.
+
+| Actual corpus | Queries | Brute median / p95 (ms) | Qdrant median / p95 (ms) | Mean top-10 overlap |
+| ---: | ---: | ---: | ---: | ---: |
+| 1,000 | 5 | 22.849 / 23.556 | 2.261 / 3.052 | 100% |
+| 7,144 (requested 10k) | 5 | 164.541 / 170.632 | 2.858 / 3.490 | 100% |
+
+The 50k request reused the same available 7,144 rows and was skipped. No data was
+synthesized to reach requested sizes. Both collections reported
+`indexed_vectors_count=0`: this measures Qdrant's unindexed retrieval at these
+sizes, **not HNSW recall or ANN scaling**. Qdrant may leave small segments unindexed
+under its default thresholds; see the official
+[collection/indexing documentation](https://qdrant.tech/documentation/manage-data/collections/).
+Readiness and applied writes do not prove every vector has an HNSW index.
+
+Tiny datasets may favour brute force because Qdrant has service overhead. Qdrant
+should scale better, but these limited results do not establish a general crossover
+point, 10k/50k performance, or relevance quality. A larger stored corpus, confirmed
+HNSW indexing, more available queries, repeated independent runs and a controlled
+machine/load are needed for those conclusions. No optimized NumPy baseline,
+concurrency/load test, metadata filtering, model inference or production service
+latency is included.
+
+Focused verification (no downloads or wall-clock thresholds):
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider tests/test_benchmark_retrieval.py tests/test_similarity.py -q
+# With the isolated PostgreSQL fixture setup described above:
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration tests/integration/test_benchmark_retrieval.py -q
+```
+
+Validation for this change:
+
+- Focused unit command above: 27 passed (19 benchmark checks and 8 cosine checks).
+- `TEST_POSTGRES_ADMIN_URL=<isolated-test-url> .venv/bin/python -m pytest -p
+  no:cacheprovider --run-integration tests -q`: 233 passed, 28 failed, two warnings.
+  All failures are existing vector retrieval tests (27 unit, one integration):
+  the current service returns `(results, target_name)` while those tests expect
+  a list, and target retrieval now requests payloads. The new snapshot integration
+  test passes. These unrelated service/test mismatches were left unchanged.
+- `.venv/bin/ruff check --no-cache .`: two existing I001 import-order errors in
+  `create_qdrant_collection.py` and `get_steam_catalogue.py`. Ruff check and format
+  check pass for all three new Python files. No type checker is configured.
+- An initial sandboxed default-suite run stalled and was interrupted; the complete
+  suite above ran successfully to completion outside that restriction against a
+  disposable PostgreSQL container, which was then removed. No live model download
+  or development database writes were needed.

@@ -9,22 +9,16 @@ import httpx
 
 from gamerec.core.config import settings
 
-STEAM_API_URL = (
-    "https://api.steampowered.com/"
-    "IStoreService/GetAppList/v1/"
-)
+STEAM_API_URL = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
 
-STEAM_APP_DETAILS_API_URL = (
-    "https://store.steampowered.com/api/appdetails"
-)
+STEAM_APP_DETAILS_API_URL = "https://store.steampowered.com/api/appdetails"
 
-STEAM_APP_REVIEW_API_URL = (
-    "https://store.steampowered.com/appreviews/{steam_app_id}"
-)
+STEAM_APP_REVIEW_API_URL = "https://store.steampowered.com/appreviews/{steam_app_id}"
 
 STEAM_OWNED_GAMES_API_URL = (
     "https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/"
 )
+
 
 async def fetch_steam_games(
     client: httpx.AsyncClient,
@@ -40,19 +34,16 @@ async def fetch_steam_games(
         "include_hardware": False,
         "last_appid": last_appid,
         "max_results": max_results,
-    }  
+    }
     if if_modified_since is not None:
         input_json["if_modified_since"] = if_modified_since
 
     params = {
-                "key": settings.steam_api_key,
-                "input_json": json.dumps(input_json),
-            }
+        "key": settings.steam_api_key,
+        "input_json": json.dumps(input_json),
+    }
 
-    response = await client.get(
-        STEAM_API_URL,
-        params=params,
-    )
+    response = await get_with_retry(client, url=STEAM_API_URL, params=params)
 
     response.raise_for_status()
 
@@ -60,10 +51,10 @@ async def fetch_steam_games(
 
     return data["response"].get("apps", [])
 
+
 async def fetch_steam_app_details(
-        client: httpx.AsyncClient,
-        steam_app_id: int
-        ) -> dict | None:
+    client: httpx.AsyncClient, steam_app_id: int
+) -> dict | None:
     params = {
         "appids": steam_app_id,
         "l": "english",
@@ -73,7 +64,7 @@ async def fetch_steam_app_details(
     response = await get_with_retry(client, url=url, params=params)
 
     response.raise_for_status()
-    
+
     data = response.json()
 
     app_data = data.get(str(steam_app_id), {})
@@ -82,9 +73,9 @@ async def fetch_steam_app_details(
 
     return app_data.get("data")
 
+
 async def fetch_steam_app_reviews(
-    client: httpx.AsyncClient,
-    steam_app_id: int
+    client: httpx.AsyncClient, steam_app_id: int
 ) -> dict | None:
     params = {
         "json": 1,
@@ -106,6 +97,7 @@ async def fetch_steam_app_reviews(
 
     return data.get("query_summary")
 
+
 def parse_steam_release_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -117,11 +109,12 @@ def parse_steam_release_date(value: str | None) -> date | None:
 
     for date_format in formats:
         try:
-            return datetime.strptime(value, date_format).date() # noqa: DTZ007
+            return datetime.strptime(value, date_format).date()  # noqa: DTZ007
         except ValueError:
             continue
 
     return None
+
 
 def normalise_game_details(data: dict) -> dict:
     release = data.get("release_date") or {}
@@ -129,9 +122,7 @@ def normalise_game_details(data: dict) -> dict:
     if release.get("coming_soon"):
         release_date = None
     else:
-        release_date = parse_steam_release_date(
-            release.get("date")
-        )
+        release_date = parse_steam_release_date(release.get("date"))
 
     return {
         "short_description": data.get("short_description"),
@@ -151,6 +142,7 @@ def normalise_game_details(data: dict) -> dict:
         "is_free": data.get("is_free"),
         "header_image": data.get("header_image"),
     }
+
 
 async def get_with_retry(
     client: httpx.AsyncClient,
@@ -190,6 +182,7 @@ async def get_with_retry(
 
     raise RuntimeError("Retry loop ended unexpectedly")
 
+
 async def fetch_steam_owned_games(
     client: httpx.AsyncClient,
     steamid64: str,
@@ -212,9 +205,10 @@ async def fetch_steam_owned_games(
 
     return payload
 
+
 def normalise_owned_games(
     payload: dict,
-) -> tuple[Literal["available", "unavailable"], int | None, list[dict]]:    
+) -> tuple[Literal["available", "unavailable"], int | None, list[dict]]:
     response = payload.get("response")
 
     if not isinstance(response, dict):
@@ -264,23 +258,19 @@ def normalise_owned_games(
             ("playtime_2weeks", playtime_2weeks_minutes),
         ):
             if value is not None and (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or value < 0
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
             ):
                 raise ValueError(
                     f"Expected '{field}' to be a non-negative integer or null"
                 )
 
-        normalised_games.append({   
-            "steam_app_id": appid,
-            "name": game.get("name"),
-            "playtime_forever_minutes": playtime_forever_minutes,
-            "playtime_2weeks_minutes": playtime_2weeks_minutes,
-        })
+        normalised_games.append(
+            {
+                "steam_app_id": appid,
+                "name": game.get("name"),
+                "playtime_forever_minutes": playtime_forever_minutes,
+                "playtime_2weeks_minutes": playtime_2weeks_minutes,
+            }
+        )
 
     return "available", reported_game_count, normalised_games
-
-   
-
-    

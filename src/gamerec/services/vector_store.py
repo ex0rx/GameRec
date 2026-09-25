@@ -152,12 +152,11 @@ async def find_similar_games(
         collection_name=settings.qdrant_game_collection,
         ids=[steam_app_id],
         with_vectors=True,
-        with_payload=True,
+        with_payload=False,
     )
     if not targets:
         return []
     vector = targets[0].vector
-    target_name = (targets[0].payload or {}).get("name", "")
     if not isinstance(vector, list) or not vector or isinstance(vector[0], list):
         raise ValueError("Target point must contain an unnamed dense game vector")
 
@@ -188,7 +187,7 @@ async def find_similar_games(
                 "score": point.score,
             }
         )
-    return results, target_name
+    return results
 
 
 async def get_game_point_payloads(

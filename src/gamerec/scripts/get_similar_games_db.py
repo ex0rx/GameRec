@@ -10,7 +10,7 @@ from gamerec.services.game_similarity import find_similar_games
 async def main() -> None:
     try:
         async with SessionLocal() as db:
-            steam_app_id = 550  
+            steam_app_id = 550
             results = await find_similar_games(
                 db=db,
                 steam_app_id=steam_app_id,  # Replace with a valid Steam App ID
@@ -24,10 +24,7 @@ async def main() -> None:
 
             rows = (await db.execute(statement)).all()
 
-            game_names = {
-                app_id: name
-                for app_id, name in rows
-            }
+            game_names = {app_id: name for app_id, name in rows}
 
             for rank, (app_id, similarity) in enumerate(results, start=1):
                 print(

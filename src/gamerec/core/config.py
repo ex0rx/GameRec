@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     database_url: str
     steam_api_key: str
     steamid64_test: str | None = None
-    embeddings_model_name: str 
-    embeddings_model_revision: str 
+    embeddings_model_name: str
+    embeddings_model_revision: str
     embeddings_vector_size: int = 384
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333

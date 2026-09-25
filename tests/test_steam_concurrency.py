@@ -23,9 +23,7 @@ async def test_enrichment_respects_concurrency_and_continues_after_failure(
     ]
 
     # Fake database result containing our three games.
-    result = SimpleNamespace(
-        scalars=lambda: SimpleNamespace(all=lambda: games)
-    )
+    result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: games))
 
     db = SimpleNamespace(
         execute=AsyncMock(return_value=result),

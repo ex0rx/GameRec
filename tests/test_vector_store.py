@@ -132,3 +132,71 @@ async def test_service_errors_propagate(operation):
     with pytest.raises(RuntimeError, match="unavailable"):
         await find_similar_games(client, 10)
     client.close.assert_not_awaited()
+
+
+@pytest_asyncio.fixture
+async def metadata_qdrant(qdrant):
+    # Scores descend in ID order; the target also matches all supplied filters.
+    payloads = [
+        {"genres": ["Action", "RPG"], "categories": ["Co-op", "Multi-player"]},
+        {"genres": ["Action"], "categories": ["Single-player"]},
+        {"genres": ["RPG"], "categories": ["Co-op"]},
+        {"genres": ["Action", "RPG"], "categories": ["Co-op"]},
+        {"genres": ["Action", "RPG"], "categories": ["Co-op", "Multi-player"]},
+        {"genres": None, "categories": None},
+        {},
+        {"genres": [], "categories": []},
+    ]
+    await upsert_game_points(
+        qdrant,
+        [
+            point(i, 1.0, float(i), {"name": f"Game {i}", **payload})
+            for i, payload in enumerate(payloads)
+        ],
+    )
+    return qdrant
+
+
+@pytest.mark.parametrize(
+    "filters, expected",
+    [
+        ({}, [1, 2, 3, 4, 5, 6, 7]),
+        ({"genres": [], "categories": []}, [1, 2, 3, 4, 5, 6, 7]),
+        ({"genres": None, "categories": None}, [1, 2, 3, 4, 5, 6, 7]),
+        ({"genres": ["Action"]}, [1, 3, 4]),
+        ({"categories": ["Co-op"]}, [2, 3, 4]),
+        ({"genres": ["Action"], "categories": ["Co-op"]}, [3, 4]),
+        ({"genres": ["Action", "RPG"]}, [3, 4]),
+        ({"categories": ["Co-op", "Multi-player"]}, [4]),
+        ({"genres": ["Action", "RPG"], "categories": ["Co-op", "Multi-player"]}, [4]),
+        ({"genres": ["Action", "Action"]}, [1, 3, 4]),
+        ({"genres": ["Missing"]}, []),
+        ({"categories": ["Missing"]}, []),
+        ({"genres": ["Action"], "categories": ["Missing"]}, []),
+        ({"genres": ["action"]}, []),
+        ({"genres": [], "categories": ["Co-op"]}, [2, 3, 4]),
+    ],
+)
+async def test_metadata_filters_and_semantics(metadata_qdrant, filters, expected):
+    results = await find_similar_games(metadata_qdrant, 0, top_k=20, **filters)
+    assert [r["steam_app_id"] for r in results] == expected
+    assert [r["name"] for r in results] == [f"Game {i}" for i in expected]
+    assert [r["score"] for r in results] == sorted(
+        [r["score"] for r in results], reverse=True
+    )
+
+
+async def test_filters_apply_before_limit_and_only_to_candidates(metadata_qdrant):
+    # Target 1 lacks Co-op; it can still query candidates that have it.
+    results = await find_similar_games(
+        metadata_qdrant, 1, top_k=1, genres=["RPG"], categories=["Co-op"]
+    )
+    assert [r["steam_app_id"] for r in results] == [2]
+    assert await find_similar_games(metadata_qdrant, 999, genres=["RPG"]) == []
+
+
+async def test_search_never_creates_indexes(metadata_qdrant, monkeypatch):
+    create = AsyncMock()
+    monkeypatch.setattr(metadata_qdrant, "create_payload_index", create)
+    await find_similar_games(metadata_qdrant, 0, genres=["Action"])
+    create.assert_not_awaited()

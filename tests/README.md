@@ -184,3 +184,45 @@ This is a small qualitative check, not a retrieval-quality evaluation or benchma
 For both Left 4 Dead 2 and Dota 2, restricting the Python cosine comparison to
 those same five indexed games gave identical rankings and scores to six decimal
 places. The manual calls exercised the running Qdrant server without writing data.
+
+## Phase 6E metadata filtering
+
+```python
+# Explicit setup for an existing/new collection (outside the search path):
+await ensure_game_collection(client)
+await ensure_game_payload_indexes(client)
+
+results = await find_similar_games(
+    client,
+    steam_app_id=550,
+    top_k=5,
+    genres=["Action"],
+    categories=["Co-op", "Multi-player"],
+)
+```
+
+These functions are in `gamerec.services.vector_store`. Each supplied value adds
+one required exact-match condition: the example requires Action AND Co-op AND
+Multi-player. Matching is case-sensitive; no trimming or normalization is done.
+`None` and empty lists leave that field unrestricted. Filters apply to candidates,
+not to the target lookup. Missing/null/empty payload fields do not match requested
+values. Self-exclusion, score ordering, limits, and unfiltered results are preserved.
+
+`ensure_game_payload_indexes(client)` creates keyword indexes for only `genres`
+and `categories`, waits for completion, and skips existing keyword indexes.
+It checks both existing types before writing and raises `ValueError` for an
+incompatible index, without replacing it. A partially completed setup can be
+rerun. Search never creates indexes; callers explicitly perform setup beforehand.
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider \
+  tests/test_vector_store.py tests/test_vector_indexes.py tests/test_vector_sync.py -q
+```
+
+Filtering tests use in-memory Qdrant; index lifecycle tests mock the async client
+because local Qdrant does not build payload indexes. Additional smoke verification
+used a disposable Qdrant container with temporary storage: both keyword indexes
+were visible in collection metadata, repeating setup issued no additional index
+writes, four sample points were preserved, and AND/no-match queries passed.
+No development collections were changed. Performance and large-catalogue retrieval
+quality are outside this phase.

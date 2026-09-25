@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gamerec.core.config import settings
 from gamerec.models.game import Game
 from gamerec.models.game_embedding import GameEmbedding
-from gamerec.services.vector_store import upsert_game_points
+from gamerec.services.vector_store import (
+    delete_game_points,
+    get_game_point_payloads,
+    scroll_game_points,
+    upsert_game_points,
+    validate_game_collection,
+)
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,9 @@ async def sync_embeddings_to_qdrant(
     client: AsyncQdrantClient,
     batch_size: int = 32,
     max_games: int | None = None,
+    *,
+    collection_name: str | None = None,
+    prune_missing: bool = False,
 ) -> dict[str, int]:
     """Upsert into an existing collection; caller owns session/client lifetime.
 
@@ -100,8 +109,12 @@ async def sync_embeddings_to_qdrant(
     if max_games is not None and max_games <= 0:
         raise ValueError("max_games must be a positive integer or None")
 
+    if prune_missing and max_games is not None:
+        raise ValueError("prune_missing requires a full sync without max_games")
+    name = collection_name or settings.qdrant_game_collection
+    await validate_game_collection(client, collection_name=name)
     last_steam_app_id = 0
-    processed = upserted = batches = 0
+    processed = upserted = batches = inserted = updated = skipped = 0
     while max_games is None or processed < max_games:
         limit = batch_size
         if max_games is not None:
@@ -110,9 +123,96 @@ async def sync_embeddings_to_qdrant(
         if not records:
             break
         points = build_qdrant_points(records, settings.embeddings_vector_size)
-        upserted += await upsert_game_points(client, points)
+        existing = await get_game_point_payloads(
+            client, [record.steam_app_id for record in records], collection_name=name
+        )
+        changed = [
+            point
+            for point in points
+            if point.id not in existing
+            or any(
+                existing[point.id].get(key) != value
+                for key, value in (point.payload or {}).items()
+            )
+        ]
+        upserted += await upsert_game_points(client, changed, collection_name=name)
+        new_count = sum(point.id not in existing for point in changed)
+        inserted += new_count
+        updated += len(changed) - new_count
+        skipped += len(points) - len(changed)
         processed += len(records)
         batches += 1
         last_steam_app_id = records[-1].steam_app_id
 
-    return {"processed": processed, "upserted": upserted, "batches": batches}
+    deleted = 0
+    if prune_missing:
+        pruning = await prune_embeddings_from_qdrant(
+            db, client, batch_size=batch_size, collection_name=name, dry_run=False
+        )
+        deleted = pruning["deleted"]
+    return {
+        "processed": processed,
+        "upserted": upserted,
+        "batches": batches,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "deleted": deleted,
+    }
+
+
+async def prune_embeddings_from_qdrant(
+    db: AsyncSession,
+    client: AsyncQdrantClient,
+    *,
+    batch_size: int = 32,
+    collection_name: str | None = None,
+    dry_run: bool = True,
+) -> dict[str, int]:
+    """Compare each Qdrant page to the complete current-model PostgreSQL set.
+
+    Defaults to preview only. Run with a dedicated session against committed
+    source data and pause concurrent embedding/sync writers during pruning.
+    There is no cross-store transaction; failures leave completed batches intact.
+    """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+    if db.new or db.dirty or db.deleted:
+        raise ValueError("Pruning requires a clean session with committed source data")
+    name = collection_name or settings.qdrant_game_collection
+    await validate_game_collection(client, collection_name=name)
+    offset = None
+    scanned = candidates = deleted = batches = 0
+    while True:
+        points, next_offset = await scroll_game_points(
+            client, collection_name=name, batch_size=batch_size, offset=offset
+        )
+        if not points:
+            break
+        if any(not isinstance(point.id, int) for point in points):
+            raise ValueError("Collection contains non-Steam point IDs; pruning stopped")
+        ids = [point.id for point in points]
+        with db.no_autoflush:
+            result = await db.scalars(
+                select(GameEmbedding.steam_app_id).where(
+                    GameEmbedding.steam_app_id.in_(ids),
+                    GameEmbedding.model_name == settings.embeddings_model_name,
+                    GameEmbedding.model_revision == settings.embeddings_model_revision,
+                )
+            )
+        present = set(result.all())
+        missing = [appid for appid in ids if appid not in present]
+        scanned += len(ids)
+        candidates += len(missing)
+        batches += 1
+        if not dry_run:
+            deleted += await delete_game_points(client, missing, collection_name=name)
+        if next_offset is None:
+            break
+        offset = next_offset
+    return {
+        "scanned": scanned,
+        "candidates": candidates,
+        "deleted": deleted,
+        "batches": batches,
+    }

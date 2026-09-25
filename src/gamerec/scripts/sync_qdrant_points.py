@@ -14,8 +14,10 @@ async def main() -> None:
             response = await sync_embeddings_to_qdrant(
                 db=db,
                 client=client,
-                batch_size=2,
-                max_games=5,
+                batch_size=10,
+                max_games=100,
+                collection_name=settings.qdrant_game_collection,
+                prune_missing=False,
             )
 
             print(response)

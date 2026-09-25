@@ -75,9 +75,12 @@ async def test_invalid_fetch_batch_size(fake_db):
 
 
 @pytest.mark.asyncio
-async def test_upsert_waits_and_uses_configured_collection(monkeypatch):
+async def test_upsert_waits_and_uses_configured_collection(
+    monkeypatch, compatible_collection_info
+):
     monkeypatch.setattr(settings, "qdrant_game_collection", "test-points")
     client = AsyncMock()
+    client.get_collection.return_value = compatible_collection_info
     assert await vector_store.upsert_game_points(client, []) == 0
     client.upsert.assert_not_awaited()
     points = build_qdrant_points([record()])
@@ -92,8 +95,11 @@ async def test_upsert_waits_and_uses_configured_collection(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("exists", [False, True])
-async def test_collection_setup_awaits_and_preserves_injected_client(exists):
+async def test_collection_setup_awaits_and_preserves_injected_client(
+    exists, compatible_collection_info
+):
     client = AsyncMock()
+    client.get_collection.return_value = compatible_collection_info
     client.collection_exists.return_value = exists
     await vector_store.ensure_game_collection(client)
     client.collection_exists.assert_awaited_once_with(settings.qdrant_game_collection)

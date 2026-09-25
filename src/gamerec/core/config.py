@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     embeddings_vector_size: int = 384
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
-    qdrant_game_collection: str = "game_embeddings_v1"
+    qdrant_game_collection: str
 
     model_config = SettingsConfigDict(
         env_file=".env",

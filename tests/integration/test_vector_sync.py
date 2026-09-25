@@ -96,6 +96,10 @@ async def test_cursor_filtering_and_payload(pg_sessions, qdrant):
             "processed": 5,
             "upserted": 5,
             "batches": 3,
+            "inserted": 5,
+            "updated": 0,
+            "skipped": 0,
+            "deleted": 0,
         }
     saved = await points(qdrant)
     assert set(saved) == {10, 30, 55, 70, 90}
@@ -117,14 +121,20 @@ async def test_bounded_batches_repeat_runs_and_updates(
     await seed(pg_sessions)
     spy = AsyncMock(wraps=qdrant.upsert)
     monkeypatch.setattr(qdrant, "upsert", spy)
-    for _ in range(2):
+    for run in range(2):
         async with pg_sessions() as db:
             assert await vector_sync.sync_embeddings_to_qdrant(
                 db, qdrant, batch_size=2, max_games=3
-            ) == {"processed": 3, "upserted": 3, "batches": 2}
+            ) == {
+                "processed": 3,
+                "upserted": 3 if run == 0 else 0,
+                "batches": 2,
+                "inserted": 3 if run == 0 else 0,
+                "updated": 0,
+                "skipped": 0 if run == 0 else 3,
+                "deleted": 0,
+            }
     assert [[p.id for p in c.kwargs["points"]] for c in spy.await_args_list] == [
-        [10, 30],
-        [55],
         [10, 30],
         [55],
     ]
@@ -139,7 +149,15 @@ async def test_bounded_batches_repeat_runs_and_updates(
     async with pg_sessions() as db:
         assert await vector_sync.sync_embeddings_to_qdrant(
             db, qdrant, batch_size=2, max_games=99
-        ) == {"processed": 5, "upserted": 5, "batches": 3}
+        ) == {
+            "processed": 5,
+            "upserted": 3,
+            "batches": 3,
+            "inserted": 2,
+            "updated": 1,
+            "skipped": 2,
+            "deleted": 0,
+        }
     saved = await points(qdrant)
     assert len(saved) == 5
     assert saved[10].vector == [0.0, 1.0] + [0.0] * 382
@@ -154,6 +172,10 @@ async def test_empty_sync(pg_sessions, qdrant):
             "processed": 0,
             "upserted": 0,
             "batches": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+            "deleted": 0,
         }
     assert await points(qdrant) == {}
 
@@ -183,7 +205,11 @@ async def test_failure_stops_batches_and_rerun_recovers(
             db, qdrant, batch_size=2
         ) == {
             "processed": 5,
-            "upserted": 5,
+            "upserted": 3,
             "batches": 3,
+            "inserted": 3,
+            "updated": 0,
+            "skipped": 2,
+            "deleted": 0,
         }
     assert len(await points(qdrant)) == 5

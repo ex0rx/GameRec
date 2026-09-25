@@ -226,3 +226,92 @@ were visible in collection metadata, repeating setup issued no additional index
 writes, four sample points were preserved, and AND/no-match queries passed.
 No development collections were changed. Performance and large-catalogue retrieval
 quality are outside this phase.
+
+## Phase 6F consistency and collection versions
+
+Collections created by `ensure_game_collection()` now store a
+`gamerec_embeddings` binding in Qdrant collection metadata: model name, revision,
+and vector size. Setup, search, sync, upsert, and deletion validate that binding
+and the actual unnamed cosine-vector configuration. Mismatches raise `ValueError`
+before point writes. This requires Qdrant server 1.16+ (collection metadata).
+
+Legacy collections without a binding are rejected, including during search.
+Their provenance cannot be inferred from vector size. Rebuild under a new name;
+no legacy data is relabelled or migrated automatically. Using the configured
+embedding model/revision, rebuild without changing the active search collection:
+
+```python
+from gamerec.services.vector_store import (
+    ensure_game_collection, ensure_game_payload_indexes,
+)
+from gamerec.services.vector_sync import (
+    sync_embeddings_to_qdrant, prune_embeddings_from_qdrant,
+)
+
+name = "game_embeddings_v2"
+await ensure_game_collection(client, collection_name=name)
+await ensure_game_payload_indexes(client, collection_name=name)
+stats = await sync_embeddings_to_qdrant(db, client, collection_name=name)
+```
+
+Use a separate process/configuration to build a different model revision while
+an old search process remains active. The builder settings must select that
+revision's existing PostgreSQL embeddings. Cutover is an explicit later settings
+change; no aliases or active-collection changes happen during rebuilds.
+
+Sync retrieves only Qdrant payloads for each bounded PostgreSQL page. Missing
+points are inserted, changed `input_hash` or payload metadata is updated, and
+unchanged points are skipped. Point IDs remain Steam app IDs. Vectors are not
+compared over the network: changing vector contents without changing the hash is
+not detected. PostgreSQL remains read-only. Counts are `processed`, `inserted`,
+`updated`, `skipped`, `upserted` (inserted + updated), `deleted`, and `batches`
+(nonempty PostgreSQL pages, including unchanged pages).
+
+Pruning is explicit and scoped to one compatible collection:
+
+```python
+preview = await prune_embeddings_from_qdrant(db, client, collection_name=name)
+# When intended, apply the same comparison against the current PostgreSQL set:
+result = await prune_embeddings_from_qdrant(
+    db, client, collection_name=name, dry_run=False,
+)
+```
+
+The default dry run returns `scanned`, `candidates`, `deleted=0`, and Qdrant-page
+`batches`. Each bounded Qdrant page is checked against all PostgreSQL embeddings
+for the active model/revision, not just IDs visited in an earlier sync. A row
+existing only for another revision is absent from this collection's source set.
+An empty source previews all points as deletion candidates; explicitly applying
+that comparison removes all points from that selected collection.
+
+Alternatively, `sync_embeddings_to_qdrant(..., prune_missing=True)` prunes after
+a successful full source scan. Combining it with `max_games` is rejected.
+Default and bounded syncs never delete points. No other collections are modified.
+
+Use a dedicated session against committed source data and pause concurrent
+embedding/sync writers while pruning. Pending ORM changes are rejected, but
+already-flushed uncommitted writes cannot be reliably distinguished from reads.
+There is no distributed transaction or lock between PostgreSQL and Qdrant.
+Failures propagate and completed batches remain applied; rerunning safely skips
+matching points and retries remaining work. A dry run is a preview, not a frozen
+plan: applying it rechecks the current source. Long-running concurrent source
+changes may require another sync.
+
+```bash
+# With TEST_POSTGRES_ADMIN_URL pointing at the disposable server above:
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration \
+  tests/test_vector_versions.py tests/test_vector_sync.py \
+  tests/test_vector_store.py tests/test_vector_indexes.py \
+  tests/integration/test_vector_sync.py \
+  tests/integration/test_vector_consistency.py \
+  tests/integration/test_vector_retrieval.py -q
+```
+
+Coverage includes mismatch/legacy rejection, hash and metadata updates, skipped
+writes, new points, preview/apply pruning, revision isolation, partial-run safety,
+empty sources, failed-run recovery, and preservation of old versions during
+rebuild. The Phase 6C repeat-run counters above are superseded by these incremental
+counts. Tests use disposable PostgreSQL and in-memory Qdrant; no model downloads.
+A separate disposable-server smoke check also verified persisted collection
+metadata, repeat-safe setup, revision-mismatch rejection, new-version creation,
+and deletion scoped to the new version while preserving the old collection.

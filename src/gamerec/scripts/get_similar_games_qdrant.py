@@ -7,14 +7,19 @@ from gamerec.services.vector_store import find_similar_games
 async def main() -> None:
         client = get_qdrant_client()
         try:
-            response = await find_similar_games(
+            response, target_name = await find_similar_games(
                 client=client,
                 steam_app_id=550,
-                top_k=5,
+                top_k=10,
             )
 
-            print(response)
-
+            print(f"Similar games to Steam App ID 550 ({target_name}):")
+            for game in response:
+                print(
+                    f"Steam App ID: {game['steam_app_id']}, "
+                    f"Name: {game['name']}, "
+                    f"Score: {game['score']}"
+                )
         finally:
             await client.close()
 

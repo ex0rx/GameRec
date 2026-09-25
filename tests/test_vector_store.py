@@ -108,16 +108,20 @@ async def test_query_uses_retrieved_vector_and_id_exclusion(qdrant, monkeypatch)
     )
 
 
-async def test_missing_target_does_not_query():
+async def test_missing_target_does_not_query(compatible_collection_info):
     client = AsyncMock(spec=AsyncQdrantClient)
+    client.get_collection.return_value = compatible_collection_info
     client.retrieve.return_value = []
     assert await find_similar_games(client, 10) == []
     client.query_points.assert_not_awaited()
 
 
 @pytest.mark.parametrize("vector", [None, [], {"named": [1.0]}, [[1.0]]])
-async def test_invalid_target_vector_does_not_issue_unintended_query(vector):
+async def test_invalid_target_vector_does_not_issue_unintended_query(
+    vector, compatible_collection_info
+):
     client = AsyncMock(spec=AsyncQdrantClient)
+    client.get_collection.return_value = compatible_collection_info
     client.retrieve.return_value = [Record(id=10, vector=vector)]
     with pytest.raises(ValueError, match="unnamed dense"):
         await find_similar_games(client, 10)
@@ -125,8 +129,9 @@ async def test_invalid_target_vector_does_not_issue_unintended_query(vector):
 
 
 @pytest.mark.parametrize("operation", ["retrieve", "query_points"])
-async def test_service_errors_propagate(operation):
+async def test_service_errors_propagate(operation, compatible_collection_info):
     client = AsyncMock(spec=AsyncQdrantClient)
+    client.get_collection.return_value = compatible_collection_info
     client.retrieve.return_value = [Record(id=10, vector=[1.0] + [0.0] * 383)]
     getattr(client, operation).side_effect = RuntimeError("unavailable")
     with pytest.raises(RuntimeError, match="unavailable"):

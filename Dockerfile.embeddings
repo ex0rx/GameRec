@@ -16,4 +16,4 @@ COPY README.md ./
 COPY src/ ./src/
 RUN uv sync --locked --no-dev --group embeddings --no-cache
 
-CMD ["python", "-m", "gamerec.scripts.get_embeddings_test"]
+CMD ["python", "-m", "gamerec.scripts.get_embeddings"]

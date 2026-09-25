@@ -10,7 +10,7 @@ from gamerec.models.game import Game
 async def main() -> None:
     try:
         async with SessionLocal() as db:
-            steam_app_id = 2246340  
+            steam_app_id = 550  
             results = await find_similar_games(
                 db=db,
                 steam_app_id=steam_app_id,  # Replace with a valid Steam App ID

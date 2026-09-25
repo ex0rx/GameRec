@@ -123,3 +123,64 @@ not all whitespace. The generation helper itself does not validate vector
 width (persistence does), and the database has no array-width constraint. Tests
 validate application transactions and model metadata, not migration upgrades or
 semantic quality of a real embedding model.
+
+## Phase 6C PostgreSQL to Qdrant sync
+
+Using the dedicated test PostgreSQL server and `TEST_POSTGRES_ADMIN_URL` above:
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration \
+  tests/test_vector_sync.py tests/integration/test_vector_sync.py -q
+```
+
+Qdrant coverage uses the real `AsyncQdrantClient(":memory:")` local engine, with
+an isolated collection per test and client cleanup. No development Qdrant server,
+model inference or downloads are used. This verifies local Qdrant semantics,
+not the deployed server's HTTP transport.
+
+The tests cover stable Steam app IDs, payloads and nullable metadata, vector
+width, model/revision isolation, sparse cursor pagination, exact batch/total
+limits, empty input, repeated upserts, changed embeddings, collection setup and
+failure recovery. The sync reads PostgreSQL without committing or flushing caller
+changes; the caller owns the session transaction and both resource lifetimes.
+`max_games` must be positive when supplied and counts points visited, including
+points already present in Qdrant. Successful runs return `processed`, `upserted`
+and `batches`; upserts wait for completion.
+
+`ensure_game_collection()` is now async and must be awaited. The sync assumes
+that the configured collection already exists. It does not delete stale points,
+change collections, or persist a cursor. After failure, rerun from the start;
+completed batches are safely overwritten. Source changes behind a run's cursor
+are picked up on the next run.
+
+## Phase 6D similar-game retrieval
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider tests/test_vector_store.py -q
+# With the disposable PostgreSQL server and TEST_POSTGRES_ADMIN_URL above:
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration \
+  tests/test_vector_store.py tests/integration/test_vector_retrieval.py -q
+```
+
+`await vector_store.find_similar_games(client, steam_app_id, top_k=5)` retrieves
+an indexed target vector and uses `query_points` with point-ID self-exclusion.
+Results contain `steam_app_id`, `name`, and `score`, in descending cosine-score
+order. Equal-score ordering is unspecified. Non-positive limits and absent targets
+return `[]`; collection/transport failures propagate. Missing names become empty
+strings. A target without the expected unnamed dense vector raises `ValueError`.
+The service neither creates collections nor closes the caller's client.
+
+Local Qdrant tests cover ranking, limits, identical vectors, self-exclusion,
+empty/missing targets, payload mapping, and failures. The PostgreSQL integration
+test syncs a synthetic sample and compares results to the unchanged Phase 5
+`game_similarity.find_similar_games` baseline. No model weights are downloaded.
+
+Manual verification also used read-only calls against five existing indexed games.
+For Left 4 Dead 2 (550), the nearest indexed games were Killing Floor (0.550205),
+Counter-Strike 2 (0.528072), Dota 2 (0.454495), and LEGO Harry Potter: Years 1-4
+(0.330766). The broader PostgreSQL baseline includes games not yet indexed in
+Qdrant, so comparing its top-k directly requires accounting for candidate coverage.
+This is a small qualitative check, not a retrieval-quality evaluation or benchmark.
+For both Left 4 Dead 2 and Dota 2, restricting the Python cosine comparison to
+those same five indexed games gave identical rankings and scores to six decimal
+places. The manual calls exercised the running Qdrant server without writing data.

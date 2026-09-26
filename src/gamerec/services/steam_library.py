@@ -30,8 +30,7 @@ async def upsert_user_game_library(
         raise ValueError("Duplicate app IDs found in normalised_games")
 
     result = await db.scalars(
-        select(Game.steam_app_id)
-        .where(Game.steam_app_id.in_(app_ids))
+        select(Game.steam_app_id).where(Game.steam_app_id.in_(app_ids))
     )
     existing_app_ids = set(result.all())
 
@@ -44,7 +43,9 @@ async def upsert_user_game_library(
         name = game.get("name")
 
         if not isinstance(name, str) or not name.strip():
-            raise ValueError(f"Expected 'name' to be a non-empty string for app ID {game['steam_app_id']}")
+            raise ValueError(
+                f"Expected 'name' to be a non-empty string for app ID {game['steam_app_id']}"
+            )
 
         missing_games.append(
             {
@@ -85,6 +86,7 @@ async def upsert_user_game_library(
 
     return len(user_game_rows)
 
+
 async def save_steam_library(
     db: AsyncSession,
     steamid64: str,
@@ -92,9 +94,7 @@ async def save_steam_library(
 ) -> int:
     async with db.begin():
         processed = await upsert_user_game_library(
-            db=db, 
-            steamid64=steamid64, 
-            normalised_games=normalised_games
+            db=db, steamid64=steamid64, normalised_games=normalised_games
         )
 
         await db.execute(
@@ -103,9 +103,3 @@ async def save_steam_library(
             .values(library_last_synced_at=datetime.now(tz=UTC))
         )
     return processed
-
-
-
-
-    
-    

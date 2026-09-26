@@ -43,6 +43,7 @@ async def test_retries_after_429(monkeypatch):
     assert response.status_code == 200
     assert request_count == 2
 
+
 @pytest.mark.asyncio
 async def test_retries_after_429_only(monkeypatch):
     # Record how many HTTP requests our function makes if it keeps getting error 429.
@@ -57,7 +58,6 @@ async def test_retries_after_429_only(monkeypatch):
             headers={"Retry-After": "1"},
         )
 
-        
     async def fake_sleep(seconds: float) -> None:
         pass
 

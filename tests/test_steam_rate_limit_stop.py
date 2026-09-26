@@ -55,12 +55,7 @@ async def run_rate_limit_scenario(
 
     # One game per database batch.
     db = SimpleNamespace(
-        execute=AsyncMock(
-            side_effect=[
-                make_db_result([game])
-                for game in games
-            ]
-        ),
+        execute=AsyncMock(side_effect=[make_db_result([game]) for game in games]),
         commit=AsyncMock(),
     )
 

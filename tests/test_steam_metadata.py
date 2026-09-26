@@ -68,9 +68,7 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
                         "success": True,
                         "data": {
                             "short_description": "Test game",
-                            "genres": [
-                                {"description": "Action"}
-                            ],
+                            "genres": [{"description": "Action"}],
                             "categories": [],
                             "developers": ["Test Developer"],
                             "publishers": ["Test Publisher"],
@@ -107,6 +105,7 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
 
     # Skip actual backoff delays during the test.
     sleep_calls = []
+
     async def fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
 
@@ -125,7 +124,7 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
         ingestion,
         "clear_metadata_failure",
         mock_clear_failure,
-)
+    )
 
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(mock_steam),
@@ -140,17 +139,11 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
 
     mock_record_failure.assert_awaited_once()
 
-    assert (
-        mock_record_failure.await_args.kwargs["steam_app_id"]
-        == 10
-    )
+    assert mock_record_failure.await_args.kwargs["steam_app_id"] == 10
 
     mock_clear_failure.assert_awaited_once()
 
-    assert (
-        mock_clear_failure.await_args.kwargs["steam_app_id"]
-        == 20
-    )
+    assert mock_clear_failure.await_args.kwargs["steam_app_id"] == 20
 
     # Both games were attempted, despite the first failing.
     assert attempted == 2
@@ -177,7 +170,7 @@ async def test_enrichment_moves_to_next_game_after_retries(monkeypatch):
     assert db.commit.await_count == 2
 
     # The retry delay was respected for each failed request.
-    assert sleep_calls.count(0.5) == 2    
+    assert sleep_calls.count(0.5) == 2
 
 
 import pytest
@@ -192,32 +185,22 @@ async def test_unavailable_game_is_marked_as_checked(monkeypatch):
         metadata_synced_at=None,
     )
 
-    result = SimpleNamespace(
-        scalars=lambda: SimpleNamespace(all=lambda: [game])
-    )
+    result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [game]))
 
     db = SimpleNamespace(
         execute=AsyncMock(return_value=result),
         commit=AsyncMock(),
     )
 
-    fetch_details = AsyncMock(return_value=None) # return no value
+    fetch_details = AsyncMock(return_value=None)  # return no value
     fetch_reviews = AsyncMock()
     clear_failure = AsyncMock()
     record_failure = AsyncMock()
 
-    monkeypatch.setattr(
-        ingestion, "fetch_steam_app_details", fetch_details
-    )
-    monkeypatch.setattr(
-        ingestion, "fetch_steam_app_reviews", fetch_reviews
-    )
-    monkeypatch.setattr(
-        ingestion, "clear_metadata_failure", clear_failure
-    )
-    monkeypatch.setattr(
-        ingestion, "record_metadata_failure", record_failure
-    )
+    monkeypatch.setattr(ingestion, "fetch_steam_app_details", fetch_details)
+    monkeypatch.setattr(ingestion, "fetch_steam_app_reviews", fetch_reviews)
+    monkeypatch.setattr(ingestion, "clear_metadata_failure", clear_failure)
+    monkeypatch.setattr(ingestion, "record_metadata_failure", record_failure)
 
     async with httpx.AsyncClient() as client:
         attempted = await ingestion.get_steam_metadata(

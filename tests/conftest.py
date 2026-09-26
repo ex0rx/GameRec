@@ -92,3 +92,22 @@ def fake_embedding_model(monkeypatch):
             return result
 
     return FakeModel()
+
+
+@pytest.fixture
+def compatible_collection_info():
+    from qdrant_client.models import Distance, VectorParams
+
+    from gamerec.core.config import settings
+    from gamerec.services.vector_store import embedding_collection_metadata
+
+    return SimpleNamespace(
+        config=SimpleNamespace(
+            params=SimpleNamespace(
+                vectors=VectorParams(
+                    size=settings.embeddings_vector_size, distance=Distance.COSINE
+                )
+            ),
+            metadata=embedding_collection_metadata(),
+        )
+    )

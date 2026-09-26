@@ -36,8 +36,8 @@ async def main():
         print(f"First 5 entries: {normalised_games[:5]}")
 
         if status != "available":
-                print("Library unavailable, skipping database save")
-                return
+            print("Library unavailable, skipping database save")
+            return
 
         async with SessionLocal() as db:
             total_processed = await save_steam_library(

@@ -9,6 +9,7 @@ class UserLibraryGameResponse(BaseModel):
     playtime_forever_minutes: int | None
     playtime_2weeks_minutes: int | None
 
+
 class UserLibraryResponse(BaseModel):
     steamid64: str
     library_last_synced_at: datetime | None

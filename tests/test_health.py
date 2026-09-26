@@ -6,6 +6,7 @@ from gamerec.main import app
 
 client = TestClient(app)
 
+
 def test_health() -> None:
     response = client.get("/health")
 

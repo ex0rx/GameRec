@@ -51,7 +51,6 @@ async def upsert_steam_games(
         },
     )
 
-
     await db.execute(statement)
     await db.commit()
 
@@ -70,19 +69,23 @@ async def ingest_steam_catalogue(
     page = 0
     sync_started_at = datetime.now(tz=UTC)
 
-    result = await db.execute(
-        select(SyncState).where(SyncState.source == "steam")
-    )
+    result = await db.execute(select(SyncState).where(SyncState.source == "steam"))
     sync_state = result.scalar_one_or_none()
 
-    if if_modified_since is None and sync_state is not None and sync_state.last_synced_at is not None:
-            if_modified_since = int(sync_state.last_synced_at.timestamp())
+    if (
+        if_modified_since is None
+        and sync_state is not None
+        and sync_state.last_synced_at is not None
+    ):
+        if_modified_since = int(sync_state.last_synced_at.timestamp())
 
     while True:
-        if max_pages is not None and page >= max_pages: # define number of pages to fetch, if max_pages is None, fetch all pages
+        if (
+            max_pages is not None and page >= max_pages
+        ):  # define number of pages to fetch, if max_pages is None, fetch all pages
             break
 
-        steam_games = await fetch_steam_games( # fetch page_size number of games greater than last_appid
+        steam_games = await fetch_steam_games(  # fetch page_size number of games greater than last_appid
             client=client,
             last_appid=last_appid,
             max_results=page_size,
@@ -92,7 +95,7 @@ async def ingest_steam_catalogue(
         if not steam_games:
             break
 
-        count = await upsert_steam_games( # update or insert the fetched games into the database
+        count = await upsert_steam_games(  # update or insert the fetched games into the database
             db=db,
             steam_games=steam_games,
         )
@@ -104,30 +107,29 @@ async def ingest_steam_catalogue(
 
         # Safety check so we can never accidentally loop forever
         if new_last_appid <= last_appid:
-            raise RuntimeError(
-                "Steam pagination did not advance last_appid"
-            )
+            raise RuntimeError("Steam pagination did not advance last_appid")
 
         last_appid = new_last_appid
 
-        print(
-            f"Page {page}: ingested {count} games "
-            f"(last_appid={last_appid})"
-        )
+        print(f"Page {page}: ingested {count} games (last_appid={last_appid})")
 
         # Last partial page means we've reached the end
         if len(steam_games) < page_size:
             break
 
-    if max_pages is None:       
-        statement = insert(SyncState).values(
-            {
-                "source": "steam",
-                "last_synced_at": sync_started_at,
-            }
-        ).on_conflict_do_update(
-            index_elements=[SyncState.source],
-            set_={"last_synced_at": sync_started_at},
+    if max_pages is None:
+        statement = (
+            insert(SyncState)
+            .values(
+                {
+                    "source": "steam",
+                    "last_synced_at": sync_started_at,
+                }
+            )
+            .on_conflict_do_update(
+                index_elements=[SyncState.source],
+                set_={"last_synced_at": sync_started_at},
+            )
         )
 
         await db.execute(statement)
@@ -183,17 +185,14 @@ async def get_steam_metadata(
         if steam_app_ids is not None:
             query = query.where(Game.steam_app_id.in_(steam_app_ids))
 
-        result = await db.execute(
-            query.order_by(Game.id).limit(current_batch_size)
-        )
-
+        result = await db.execute(query.order_by(Game.id).limit(current_batch_size))
 
         games = result.scalars().all()
 
         if not games:
             break
 
-        last_seen_id = games[-1].id if games else last_seen_id # move cursor
+        last_seen_id = games[-1].id if games else last_seen_id  # move cursor
 
         results = await asyncio.gather(
             *(
@@ -231,10 +230,7 @@ async def get_steam_metadata(
                 else:
                     conscecutive_rate_limits = 0
 
-                print(
-                    f"Failed to fetch metadata for "
-                    f"{game.steam_app_id}: {error}"
-                )
+                print(f"Failed to fetch metadata for {game.steam_app_id}: {error}")
 
                 await record_metadata_failure(
                     db=db,
@@ -280,7 +276,6 @@ async def get_steam_metadata(
             )
             total_succeeded += 1
 
-
         await db.commit()
         print(
             f"Progress: {total_attempted} attempted | "
@@ -296,12 +291,9 @@ async def get_steam_metadata(
             )
             break
 
-
     elapsed = time.perf_counter() - started_at
     throughput = total_attempted / elapsed if elapsed > 0 else 0
     stop_reason = "rate limit" if stopped_due_to_rate_limit else "Run completed"
-
-
 
     print(
         f"\nEnrichment complete | "
@@ -312,16 +304,16 @@ async def get_steam_metadata(
         f"Failed: {total_failed} | "
         f"Elapsed: {elapsed:.1f}s | "
         f"Throughput: {throughput:.2f} games/s"
-    )        
-         
+    )
+
     return total_attempted
 
+
 async def fetch_one_game(
-        client: httpx.AsyncClient,
-        steam_app_id: int,
-        semaphore: asyncio.Semaphore,
-        request_delay: float,
-       
+    client: httpx.AsyncClient,
+    steam_app_id: int,
+    semaphore: asyncio.Semaphore,
+    request_delay: float,
 ) -> tuple[dict | None, dict | None, httpx.HTTPError | None]:
     async with semaphore:
         try:
@@ -346,6 +338,7 @@ async def fetch_one_game(
         finally:
             await asyncio.sleep(request_delay)
 
+
 async def record_metadata_failure(
     db: AsyncSession,
     steam_app_id: int,
@@ -365,9 +358,7 @@ async def record_metadata_failure(
         .on_conflict_do_update(
             index_elements=[SteamMetadataFailure.steam_app_id],
             set_={
-                "attempt_count": (
-                    SteamMetadataFailure.attempt_count + 1
-                ),
+                "attempt_count": (SteamMetadataFailure.attempt_count + 1),
                 "last_error": error_message,
                 "last_failed_at": now,
             },
@@ -375,6 +366,7 @@ async def record_metadata_failure(
     )
 
     await db.execute(statement)
+
 
 async def clear_metadata_failure(
     db: AsyncSession,

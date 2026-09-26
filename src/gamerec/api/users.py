@@ -23,11 +23,12 @@ router = APIRouter(
     tags=["users"],
 )
 
-@router.get(
-        "/{steamid64}/library",
-        response_model=UserLibraryResponse,
-        summary="Get a user's game library",)
 
+@router.get(
+    "/{steamid64}/library",
+    response_model=UserLibraryResponse,
+    summary="Get a user's game library",
+)
 async def get_user_library_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
     steamid64: str,
@@ -46,13 +47,14 @@ async def get_user_library_endpoint(
             status_code=404,
             detail=f"User with steamid64 {steamid64} not found",
         )
-    
+
     return user_game_library
+
 
 @router.put(
     "/{steamid64}/preferences/{steam_app_id}",
     summary="Update a user's game preference",
-    response_model=UserGamePreferenceResponse
+    response_model=UserGamePreferenceResponse,
 )
 async def update_user_game_preference(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -72,24 +74,24 @@ async def update_user_game_preference(
     except UserNotFoundError:
         raise HTTPException(
             status_code=404,
-            detail=f"User with steamid64 {steamid64} not found",        
+            detail=f"User with steamid64 {steamid64} not found",
         )
-    
+
     except GameNotFoundError:
         raise HTTPException(
             status_code=404,
             detail=f"Game with steam_app_id {steam_app_id} not found",
         )
-    
+
     response = UserGamePreferenceResponse.model_validate(saved_preference)
-    
+
     return response
 
 
 @router.get(
     "/{steamid64}/preferences",
     summary="Get all game preferences from a user",
-    response_model=list[UserGamePreferenceResponse]
+    response_model=list[UserGamePreferenceResponse],
 )
 async def list_user_game_preferences(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -104,15 +106,16 @@ async def list_user_game_preferences(
                 steamid64=steamid64,
                 limit=limit,
                 offset=offset,
-        )
+            )
 
     except UserNotFoundError:
         raise HTTPException(
             status_code=404,
             detail=f"User with steamid64 {steamid64} not found",
         )
-    
+
     return user_game_preferences
+
 
 @router.delete(
     "/{steamid64}/preferences/{steam_app_id}",
@@ -137,7 +140,7 @@ async def remove_user_game_preference(
             status_code=404,
             detail=f"User with steamid64 {steamid64} not found",
         )
-    
+
     except GameNotFoundError:
         raise HTTPException(
             status_code=404,

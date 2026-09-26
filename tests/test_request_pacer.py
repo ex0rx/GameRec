@@ -63,22 +63,16 @@ async def test_pacer_spaces_concurrent_requests_including_retries():
         "30": 1,
     }
 
-    assert all(
-        response.status_code == 200
-        for response in responses
-    )
+    assert all(response.status_code == 200 for response in responses)
 
     # Measure the interval between successive request starts.
     intervals = [
         later - earlier
-        for earlier, later in zip( # noqa RUF007
+        for earlier, later in zip(  # noqa RUF007
             request_times,
             request_times[1:],
         )
     ]
 
     # Small tolerance for clock/scheduling precision.
-    assert all(
-        interval >= min_interval - 0.005
-        for interval in intervals
-    )
+    assert all(interval >= min_interval - 0.005 for interval in intervals)

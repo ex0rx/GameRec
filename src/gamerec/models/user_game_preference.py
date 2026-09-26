@@ -32,7 +32,3 @@ class UserGamePreference(Base):
         nullable=False,
         server_default=func.now(),
     )
-
-
-
-    

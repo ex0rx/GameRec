@@ -10,8 +10,10 @@ from gamerec.models.user_game_preference import UserGamePreference
 class UserNotFoundError(Exception):
     pass
 
+
 class GameNotFoundError(Exception):
     pass
+
 
 async def upsert_user_game_preference(
     db: AsyncSession,
@@ -41,7 +43,10 @@ async def upsert_user_game_preference(
             preference=preference,
         )
         .on_conflict_do_update(
-            index_elements=[UserGamePreference.steamid64, UserGamePreference.steam_app_id],
+            index_elements=[
+                UserGamePreference.steamid64,
+                UserGamePreference.steam_app_id,
+            ],
             set_={
                 "preference": preference,
                 "preference_last_updated_at": func.now(),
@@ -51,7 +56,8 @@ async def upsert_user_game_preference(
     )
 
     result = await db.execute(preference_statement)
-    return result.scalar_one_or_none()    
+    return result.scalar_one_or_none()
+
 
 async def get_user_game_preference(
     db: AsyncSession,
@@ -77,6 +83,7 @@ async def get_user_game_preference(
     result = await db.execute(preference_statement)
     return result.scalars().all()
 
+
 async def delete_user_game_preference(
     db: AsyncSession,
     steamid64: str,
@@ -96,15 +103,8 @@ async def delete_user_game_preference(
     if not game:
         raise GameNotFoundError()
 
-    delete_statement = (
-        delete(UserGamePreference)
-        .where(
-            UserGamePreference.steamid64 == steamid64,
-            UserGamePreference.steam_app_id == steam_app_id,
-        )
+    delete_statement = delete(UserGamePreference).where(
+        UserGamePreference.steamid64 == steamid64,
+        UserGamePreference.steam_app_id == steam_app_id,
     )
     await db.execute(delete_statement)
-
-        
-
-   

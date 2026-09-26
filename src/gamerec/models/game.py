@@ -102,7 +102,7 @@ class Game(Base):
     categories: Mapped[list[str] | None] = mapped_column(
         JSONB,
         nullable=True,
-    )   
+    )
 
     developers: Mapped[list[str] | None] = mapped_column(
         JSONB,
@@ -120,6 +120,6 @@ class Game(Base):
     )
 
     metadata_available: Mapped[bool | None] = mapped_column(
-    Boolean,
-    nullable=True,
-)
+        Boolean,
+        nullable=True,
+    )

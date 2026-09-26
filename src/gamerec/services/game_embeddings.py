@@ -212,3 +212,27 @@ async def process_game_embeddings(
         "generated": generated,
         "skipped": processed - generated,
     }
+
+async def get_game_embedding_vector(
+    db: AsyncSession,
+    steam_app_id: int,
+) -> list[float] | None:
+    """
+    Retrieve the embedding vector for a specific game based on its Steam App ID.
+    Returns:
+        list[float] | None: The embedding vector if found, otherwise None.    
+    
+    """
+    statement = select(GameEmbedding.embedding).where(
+        GameEmbedding.steam_app_id == steam_app_id,
+        GameEmbedding.model_name == settings.embeddings_model_name,
+        GameEmbedding.model_revision == settings.embeddings_model_revision,
+    )
+
+    result = await db.execute(statement)
+    embedding_row = result.scalar_one_or_none()
+
+    if embedding_row is None:
+        return None
+
+    return embedding_row

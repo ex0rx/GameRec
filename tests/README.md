@@ -430,3 +430,83 @@ Validation for this change:
   suite above ran successfully to completion outside that restriction against a
   disposable PostgreSQL container, which was then removed. No live model download
   or development database writes were needed.
+
+## Phase 7 weighted user profiles
+
+`services.user_profile.build_user_profile_vector(db, steamid64)` returns a
+unit-length profile plus the complete owned Steam app ID set, or `None` when no
+meaningful profile exists. Steam user IDs use the model's string representation.
+One SELECT loads all owned games and their user-scoped preferences with a left
+join; one batched SELECT loads embeddings for the configured model/revision.
+There is no 50-game limit. Owned IDs include games without usable embeddings.
+No inference, embedding generation, DB writes, or external service calls occur.
+
+For each usable embedded game:
+
+```text
+playtime_weight = log1p(lifetime_minutes) / sum(log1p(lifetime_minutes))
+weight = playtime_weight * preference_weight
+profile = L2_normalize(sum(weight * game_embedding))
+```
+
+Constants in `user_profile.py` specify the policy:
+
+| Signal | Weight or threshold |
+| --- | ---: |
+| liked | 2.0 |
+| disliked | -1.0 |
+| neutral | 0.5 |
+| no rating (missing row; not a new stored preference state) | 0.5 |
+| minimum played games with usable embeddings | 2 |
+| minimum lifetime minutes per qualifying game | 30 |
+| minimum usable vector/final sum norm | 1e-12 |
+
+Normalization is over usable embedded owned games only. Lifetime and recent
+playtime are not added: the recent window overlaps lifetime minutes. Missing or
+negative lifetime minutes count as zero. `log1p` compresses extreme playtime;
+normalization makes behavioural weights sum to one before preference multipliers.
+In behavioural mode, unplayed games have zero weight even when explicitly liked.
+Unknown preference strings use the unrated weight.
+
+Fallbacks are deterministic:
+
+1. If at least two usable games have 30+ minutes each, use the formula above.
+   Games below 30 minutes still contribute; 30 minutes is an evidence threshold,
+   not a per-game cutoff.
+2. Otherwise, if any usable game has a recognized preference, use only preference
+   weights, including the default for unrated games.
+3. With insufficient playtime and no usable preferences, use the original
+   unweighted sum of library embeddings.
+
+Wrong-dimension, nonfinite and zero embeddings are skipped before computing
+playtime evidence. Stored embeddings are already L2-normalized by generation.
+No usable embeddings, a final norm at most 1e-12, or no positive-weight contribution
+returns `None`. Cancellation and all-negative profiles do not fall back to an
+unweighted sum that would undo explicit dislikes. Missing users/empty libraries
+also return `None`. A single positive game can still yield a preference-only or
+unweighted profile. Thresholds/weights are simple initial heuristics, not tuned
+or evaluated recommendation-quality claims.
+
+Candidate generation and owned-game filtering remain separate:
+
+```python
+profile = await build_user_profile_vector(db, steamid64)
+if profile is not None:
+    vector, owned_app_ids = profile
+    candidates = await get_user_recommendation_candidates(client, vector)
+    recommendations = filter_candidates(candidates, owned_app_ids)
+```
+
+Qdrant similarity remains the ranking score; there is no extra reranker or
+popularity fallback. A `None` profile requires the caller to skip personalized
+retrieval. Stored library freshness and privacy state are not rechecked here.
+
+```bash
+.venv/bin/python -m pytest -p no:cacheprovider tests/test_user_profile.py -q
+# With an isolated TEST_POSTGRES_ADMIN_URL (see TESTING.md):
+.venv/bin/python -m pytest -p no:cacheprovider --run-integration tests/integration/test_user_profile.py -q
+```
+
+Tests use synthetic vectors and signals with no Steam/model calls. PostgreSQL
+coverage verifies full-library ownership beyond 50 games, other-user preference
+isolation, and embedding revision filtering.

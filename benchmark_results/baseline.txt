@@ -1,0 +1,18 @@
+Top 10 recommendations:
+
+ 1. World Of Undead (Steam App ID: 454730) Similarity: 0.7672
+ 2. LEVEL UP! (Steam App ID: 332150) Similarity: 0.7629
+ 3. OBLITACRATER (Steam App ID: 457250) Similarity: 0.7574
+ 4. Butsbal (Steam App ID: 375330) Similarity: 0.7531
+ 5. Zone4 (Steam App ID: 518660) Similarity: 0.7512
+ 6. Cave Story+ (Steam App ID: 200900) Similarity: 0.7507
+ 7. Tower Wars (Steam App ID: 214360) Similarity: 0.7495
+ 8. Moribund (Steam App ID: 500790) Similarity: 0.7493
+ 9. Armed and Gelatinous: Couch Edition (Steam App ID: 446510) Similarity: 0.7382
+10. Elements: Epic Heroes (Steam App ID: 410490) Similarity: 0.7365
+
+candidate_k = 50
+top_k = 10
+embedding model = all-MiniLM-L6-v2
+ranking = Qdrant cosine similarity only
+owned games = filtered

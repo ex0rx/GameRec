@@ -3,7 +3,7 @@ import time
 from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -137,6 +137,20 @@ async def ingest_steam_catalogue(
 
     return total_ingested
 
+async def get_random_unsynced_game_ids(
+    db: AsyncSession,
+    limit: int,
+) -> list[int]:
+    statement = (
+        select(Game.steam_app_id)
+        .where(Game.metadata_synced_at.is_(None))
+        .order_by(func.random())
+        .limit(limit)
+    )
+
+    result = await db.execute(statement)
+
+    return list(result.scalars().all())
 
 async def get_steam_metadata(
     db: AsyncSession,
@@ -377,3 +391,4 @@ async def clear_metadata_failure(
             SteamMetadataFailure.steam_app_id == steam_app_id
         )
     )
+

@@ -26,6 +26,7 @@ Thumbs.db
 
 # Logs
 *.log
+benchmark_results/recommendations/
 
 # agents
 .agents

@@ -9,6 +9,8 @@ from unittest.mock import Mock
 import pytest
 
 from gamerec.services.hybrid_user_recommendation import (
+    DAYS_PER_YEAR,
+    RECENCY_HALF_LIFE_YEARS,
     CandidateAffinityScores,
     CandidateRankingFeatures,
     CandidateRankingMetadata,
@@ -18,6 +20,7 @@ from gamerec.services.hybrid_user_recommendation import (
     build_user_affinity_profile,
     calculate_genre_scores,
     calculate_release_recency,
+    capped_log_playtime_weights,
     get_candidate_ranking_metadata,
     get_global_genre_statistics,
     rank_candidates,
@@ -42,14 +45,98 @@ def played(appid, genres, *, preference="liked", minutes=100, categories=None):
     return UserGameAffinityMetadata(appid, minutes, preference, genres, categories)
 
 
+def test_capped_playtime_empty_zero_negative_and_single_game():
+    assert capped_log_playtime_weights([]) == []
+    assert capped_log_playtime_weights([0, None, -20]) == [0.0, 0.0, 0.0]
+    assert capped_log_playtime_weights([None, 100, -2]) == pytest.approx(
+        [0.0, log1p(100), 0.0]
+    )
+
+
+def test_capped_playtime_interpolates_and_preserves_input_order():
+    playtimes = [10_000, 0, 10, 100, -1]
+    weights = capped_log_playtime_weights(playtimes, percentile=50)
+
+    assert weights == pytest.approx([log1p(100), 0, log1p(10), log1p(100), 0])
+    assert weights == capped_log_playtime_weights(playtimes, percentile=50)
+    assert all(isfinite(weight) and weight >= 0 for weight in weights)
+    assert capped_log_playtime_weights([10, 100, 10_000], percentile=100) == pytest.approx(
+        [log1p(10), log1p(100), log1p(10_000)]
+    )
+
+
+def test_p90_caps_outlier_but_leaves_lower_playtimes_unchanged():
+    playtimes = [10, *([100] * 9), 10**9]
+    weights = capped_log_playtime_weights(playtimes)
+
+    assert weights[0] == pytest.approx(log1p(10))
+    assert weights[1:10] == pytest.approx([log1p(100)] * 9)
+    assert weights[-1] == pytest.approx(log1p(100))
+    assert all(isfinite(weight) and weight >= 0 for weight in weights)
+    ordinary = capped_log_playtime_weights([10, 100, 1_000, 10_000])
+    assert ordinary[0] < ordinary[1] < ordinary[2] < ordinary[3]
+
+
+@pytest.mark.parametrize("percentile", [0, -1, 101, float("nan"), float("inf")])
+def test_capped_playtime_rejects_invalid_percentile(percentile):
+    with pytest.raises(ValueError, match="percentile"):
+        capped_log_playtime_weights([100], percentile=percentile)
+
+
+def test_p90_limits_outlier_genre_and_category_influence():
+    games = [
+        played(i, ["Strategy"], categories=["Co-op"]) for i in range(1, 10)
+    ]
+    games += [
+        played(10, ["RPG"], categories=["Crafting"]),
+        played(11, ["Action"], minutes=10**9, categories=["Single-player"]),
+    ]
+    kwargs = {"total_games": 0, "genre_counts": {}}
+    capped = build_user_affinity_profile(games, **kwargs)
+    uncapped = build_user_affinity_profile(games, playtime_percentile=None, **kwargs)
+    assert build_user_affinity_profile(games, playtime_percentile=100, **kwargs) == uncapped
+
+    assert capped.genres_score["Strategy"] == uncapped.genres_score["Strategy"] == 1.0
+    assert 0 < capped.genres_score["Action"] < uncapped.genres_score["Action"]
+    assert capped.genres_score["RPG"] > 0
+    assert capped.categories_score["Single-player"] < uncapped.categories_score["Single-player"]
+    assert capped.categories_score["Crafting"] > 0
+    candidate = metadata(12, genres=["Action"])
+    assert build_candidate_affinity_scores({12: candidate}, capped)[12].genres_affinity == pytest.approx(
+        capped.genres_score["Action"]
+    )
+
+
+def test_capped_affinity_preserves_preference_signs_and_empty_metadata():
+    profile = build_user_affinity_profile(
+        [
+            played(1, ["Action"], preference="liked", categories=["Co-op"]),
+            played(2, ["Puzzle"], preference="disliked", categories=["Solo"]),
+            played(3, ["RPG"], preference=None, categories=["Crafting"]),
+            played(4, ["Adventure"], preference="neutral", categories=["Exploration"]),
+            played(5, None, minutes=100, categories=None),
+            played(6, ["No-play"], minutes=0, categories=["None"]),
+        ],
+        total_games=0,
+        genre_counts={},
+    )
+
+    assert profile.genres_score["Action"] == 1.0
+    assert profile.genres_score["Puzzle"] < 0 < profile.genres_score["RPG"]
+    assert profile.categories_score == pytest.approx({
+        "Co-op": 1.0, "Solo": -0.6, "Crafting": 0.5, "Exploration": 0.4,
+    })
+    assert "No-play" not in profile.genres_score
+
+
 @pytest.mark.parametrize(
     "release, expected",
     [
         (None, 0.0),
         (AS_OF, 1.0),
         (AS_OF + timedelta(days=365), 1.0),
-        (AS_OF - timedelta(days=3652), 0.5),
-        (AS_OF - timedelta(days=7305), 0.25),
+        (AS_OF - timedelta(days=round(RECENCY_HALF_LIFE_YEARS * DAYS_PER_YEAR)), 0.5),
+        (AS_OF - timedelta(days=round(2 * RECENCY_HALF_LIFE_YEARS * DAYS_PER_YEAR)), 0.25),
     ],
 )
 def test_recency_half_life_missing_future_and_bounds(release, expected):

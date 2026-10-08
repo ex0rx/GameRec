@@ -61,3 +61,37 @@ without pinning a model revision. This milestone preserves that behavior.
 Reference: [Compose profiles](https://docs.docker.com/compose/how-tos/profiles/),
 [uv locked syncing](https://docs.astral.sh/uv/concepts/projects/sync/), and
 [Hugging Face cache/offline settings](https://huggingface.co/docs/huggingface_hub/main/package_reference/environment_variables).
+
+## Recommendation evaluation
+
+With the API, PostgreSQL and Qdrant services running, evaluate the configured
+test user using the current catalogue and library. The script only reads these
+services and writes a new JSON file under `benchmark_results/recommendations/`.
+That directory is ignored by Git because results may contain personal taste data.
+
+```bash
+docker compose exec api python -m gamerec.scripts.evaluate_recommendations --runs 20 --warmups 2
+```
+
+Add `--mmr` to compare the current hybrid top 20 with MMR at lambda 0.85 using
+the same ranked candidate pool. Use `--mmr-lambda 0.75` for another ablation.
+For a quick local check, use `--runs 1 --warmups 0`. The default run reports
+median, nearest-rank p95, minimum and maximum latency across 20 measured runs.
+Each configuration times profile construction through ranking. MMR fetch and
+selection time is recorded separately and included in its total.
+
+Manual labels are optional. A JSON file with `{"730": 2, "105600": 1}` gives
+grades 0 (poor), 1 (somewhat relevant), or 2 (would consider playing). Supply
+it with `--labels /app/path/to/labels.json`. For multiple users, repeat
+`--steamid64` and use `{"users": {"<user_id_hash>": {"730": 2}}}`. The user hash
+appears in the JSON output; raw Steam IDs are not saved. Missing labels leave
+relevance and nDCG metrics null and report coverage explicitly. The nDCG ideal
+ranking uses all grades in the supplied label file, so keep the judged pool
+consistent across comparisons.
+
+Configurations A and B use profile-only retrieval; C uses the current profile
+and seed retrieval. All use the same review eligibility threshold and top-K.
+A ranks by semantic similarity; B uses the historical 0.70/0.15/0.15
+semantic/popularity/review preset; C uses the live `rank_candidates` defaults.
+Differences between A and C combine retrieval and scoring changes. Pairwise
+embedding cosine is a content-diversity diagnostic, not a relevance measure.

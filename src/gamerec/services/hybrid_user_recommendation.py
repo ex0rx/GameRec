@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from math import copysign, isfinite, log, log1p, sqrt
@@ -10,7 +11,7 @@ from gamerec.models.user_game import UserGame
 from gamerec.models.user_game_preference import UserGamePreference
 from gamerec.services.user_profile import PREFERENCE_WEIGHTS, UNRATED_WEIGHT
 
-RECENCY_HALF_LIFE_YEARS = 10.0
+RECENCY_HALF_LIFE_YEARS = 15.0
 DAYS_PER_YEAR = 365.25
 EXCLUDED_AFFINITY_GENRES = frozenset({"Free To Play", "Early Access"})
 
@@ -205,10 +206,10 @@ def rank_candidates(
     features: dict[int, CandidateRankingFeatures],
     user_affinity_scores: dict[int, CandidateAffinityScores],
     *,
-    similarity_weight: float = 0.45,
+    similarity_weight: float = 0.30,
     popularity_weight: float = 0.30,
     review_quality_weight: float = 0.10,
-    affinity_weight: float = 0.10,
+    affinity_weight: float = 0.25,
     recency_weight: float = 0.05,
 ) -> list[RankedCandidate]:
 
@@ -411,23 +412,51 @@ def filter_affinity_genres(genres: list[str] | None) -> list[str]:
     )
 
 
+def capped_log_playtime_weights(
+    playtimes_minutes: Sequence[int | None],
+    *,
+    percentile: float = 90,
+) -> list[float]:
+    """Interpolate the cap at zero-based position (n - 1) * percentile / 100."""
+    if not isfinite(percentile) or not 0 < percentile <= 100:
+        raise ValueError("percentile must be finite and within (0, 100].")
+
+    transformed = [log1p(max(0, minutes or 0)) for minutes in playtimes_minutes]
+    positive = sorted(weight for weight in transformed if weight > 0)
+    if not positive:
+        return [0.0] * len(transformed)
+
+    position = (len(positive) - 1) * percentile / 100
+    lower = int(position)
+    fraction = position - lower
+    cap = positive[lower] + fraction * (
+        positive[min(lower + 1, len(positive) - 1)] - positive[lower]
+    )
+    return [min(weight, cap) for weight in transformed]
+
+
 def build_user_affinity_profile(
     games: list[UserGameAffinityMetadata],
     *,
     total_games: int,
     genre_counts: dict[str, int],
+    playtime_percentile: float | None = 90,
 ) -> UserAffinityProfile:
     genre_scores: dict[str, float] = {}
     category_scores: dict[str, float] = {}
 
-    for game in games:
-        if game.playtime_minutes is None or game.playtime_minutes <= 0:
+    playtimes = [game.playtime_minutes for game in games]
+    playtime_weights = (
+        capped_log_playtime_weights(playtimes, percentile=playtime_percentile)
+        if playtime_percentile is not None
+        else [log1p(max(0, minutes or 0)) for minutes in playtimes]
+    )
+
+    for game, playtime_weight in zip(games, playtime_weights, strict=True):
+        if playtime_weight <= 0:
             continue
 
         preference_weight = PREFERENCE_WEIGHTS.get(game.preference, UNRATED_WEIGHT)
-
-        playtime_weight = log1p(max(0, game.playtime_minutes))
-
         weight = preference_weight * playtime_weight
 
         for genre in filter_affinity_genres(game.genres):

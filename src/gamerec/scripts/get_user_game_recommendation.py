@@ -17,14 +17,16 @@ from gamerec.services.hybrid_user_recommendation import (
 )
 from gamerec.services.user_profile import build_user_profile_vector
 from gamerec.services.user_recommendation import (
-    filter_owned_games,
-    get_user_recommendation_candidates,
+    get_multi_source_recommendation_candidates,
 )
 from gamerec.services.vector_store import get_qdrant_client
 
 STEAMID64 = settings.steamid64_test
 TOP_K = 20
-CANDIDATE_K = 1000
+PROFILE_CANDIDATE_K = 5000
+SEED_GAME_COUNT = 10
+SEED_CANDIDATE_K = 100
+MIN_TOTAL_REVIEWS = 500
 
 
 async def main() -> None:
@@ -44,10 +46,38 @@ async def main() -> None:
                 total_games=total_games,
                 genre_counts=genre_counts,
             )
+            uncapped_affinity_profile = build_user_affinity_profile(
+                user_affinity_metadata,
+                total_games=total_games,
+                genre_counts=genre_counts,
+                playtime_percentile=None,
+            )
 
-            print("User affinity profile:")
-            print(f"Genres score: {user_affinity_profile.genres_score}")
-            print(f"Categories score: {user_affinity_profile.categories_score}")
+            print("Strongest affinity scores (uncapped -> p90 capped):")
+            for label, uncapped, capped in (
+                (
+                    "Genres",
+                    uncapped_affinity_profile.genres_score,
+                    user_affinity_profile.genres_score,
+                ),
+                (
+                    "Categories",
+                    uncapped_affinity_profile.categories_score,
+                    user_affinity_profile.categories_score,
+                ),
+            ):
+                strongest = sorted(
+                    uncapped.keys() | capped.keys(),
+                    key=lambda name: (
+                        -max(abs(uncapped.get(name, 0)), abs(capped.get(name, 0))),
+                        name,
+                    ),
+                )[:5]
+                print(f"{label}:")
+                for name in strongest:
+                    before = uncapped.get(name, 0.0)
+                    after = capped.get(name, 0.0)
+                    print(f"  {name}: {before:.3f} -> {after:.3f} ({after - before:+.3f})")
 
             profile_result = await build_user_profile_vector(
                 db=db,
@@ -60,20 +90,23 @@ async def main() -> None:
 
             user_profile_vector, owned_ids = profile_result
 
-            candidates = await get_user_recommendation_candidates(
+            generation = await get_multi_source_recommendation_candidates(
+                db=db,
                 client=client,
+                steamid64=STEAMID64,
                 user_profile_vector=user_profile_vector,
-                candidate_k=CANDIDATE_K,
+                owned_ids=owned_ids,
+                profile_candidate_k=PROFILE_CANDIDATE_K,
+                seed_game_count=SEED_GAME_COUNT,
+                seed_candidate_k=SEED_CANDIDATE_K,
             )
-
-            print(f"Candidates retrieved: {len(candidates)}")
-
-            candidates = filter_owned_games(
-                candidates=candidates,
-                user_steam_app_ids=owned_ids,
-            )
-
-            print(f"Candidates after owned filter: {len(candidates)}")
+            candidates = generation.candidates
+            print(f"Profile candidates: {generation.profile_count}")
+            print(f"Seeds selected: {len(generation.seed_ids)} {generation.seed_ids}")
+            print(f"Seed candidates before dedupe: {generation.seed_candidate_count}")
+            print(f"Merged unique candidates: {generation.merged_count}")
+            print(f"Candidates after owned filter: {generation.after_owned_count}")
+            print(f"Candidates with embeddings: {len(candidates)}")
 
             candidate_steam_app_ids = [
                 candidate["steam_app_id"] for candidate in candidates
@@ -87,7 +120,7 @@ async def main() -> None:
             candidates = filter_eligible_candidates(
                 candidates=candidates,
                 metadata=candidate_metadata,
-                min_total_reviews=100,
+                min_total_reviews=MIN_TOTAL_REVIEWS,
             )
 
             print(f"Candidates after eligibility filter: {len(candidates)}")

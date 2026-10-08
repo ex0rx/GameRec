@@ -48,7 +48,7 @@ async def test_empty_qdrant_response_returns_empty_candidates():
     client.query_points.return_value = SimpleNamespace(points=[])
 
     assert await get_user_recommendation_candidates(client, [1.0, 0.0]) == []
-    assert client.query_points.await_args.kwargs["limit"] == 10
+    assert client.query_points.await_args.kwargs["limit"] == 1000
 
 
 @pytest.mark.asyncio

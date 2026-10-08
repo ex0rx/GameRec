@@ -24,7 +24,7 @@ async def main():
 
         steam_app_ids = await get_random_unsynced_game_ids(
             db,
-            limit=30_000,
+            limit=50_000,
         )
 
         for app_id_batch in batched(steam_app_ids, 1000):

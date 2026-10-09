@@ -6,6 +6,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from qdrant_client.http.exceptions import ApiException
+from sqlalchemy.exc import SQLAlchemyError
 
 from gamerec.api import search, users
 from gamerec.db import get_db
@@ -111,6 +112,47 @@ async def test_structured_filters_are_forwarded(client, services, fake_db):
     )
 
 
+@pytest.mark.parametrize(
+    ("params", "filters"),
+    [
+        ({"genres": "Action"}, SearchFilters(genres=["Action"])),
+        ({"categories": "Co-op"}, SearchFilters(categories=["Co-op"])),
+        (
+            {"release_year_from": "2020", "release_year_to": "2025"},
+            SearchFilters(release_year_from=2020, release_year_to=2025),
+        ),
+        ({"min_reviews": "500"}, SearchFilters(min_reviews=500)),
+    ],
+)
+async def test_individual_filters_are_forwarded(
+    client, services, fake_db, params, filters
+):
+    _, ranking, qdrant = services
+    response = await client.get("/search/games", params={"query": "games", **params})
+    assert response.status_code == 200
+    ranking.assert_awaited_once_with(
+        fake_db, qdrant, [0.0] * 384, top_k=20, filters=filters
+    )
+
+
+async def test_response_preserves_ranked_order_for_identical_data(client, services):
+    _, ranking, _ = services
+    ranking.return_value = search_result(
+        RankedSearchGame(10, "First", 0.5, 0.8, 0.9, 0.7),
+        RankedSearchGame(20, "Second", 0.7, 0.5, 0.8, 0.6),
+        RankedSearchGame(30, "Third", 0.9, 0.2, 0.7, 0.5),
+    )
+    first = await client.get("/search/games?query=games")
+    second = await client.get("/search/games?query=games")
+    assert first.status_code == second.status_code == 200
+    assert first.json() == second.json()
+    games = first.json()["games"]
+    assert [game["steam_app_id"] for game in games] == [10, 20, 30]
+    assert [game["hybrid_score"] for game in games] == sorted(
+        (game["hybrid_score"] for game in games), reverse=True
+    )
+
+
 async def test_empty_results_are_successful(client, services):
     _, ranking, qdrant = services
     ranking.return_value = search_result()
@@ -162,7 +204,9 @@ async def test_embedding_failure_returns_503_without_details(client, services):
     qdrant.close.assert_not_awaited()
 
 
-@pytest.mark.parametrize("error", [ApiException("down"), httpx.ConnectError("down")])
+@pytest.mark.parametrize(
+    "error", [ApiException("down"), httpx.ConnectError("down"), SQLAlchemyError("down")]
+)
 async def test_search_failure_returns_503_and_closes_qdrant(client, services, error):
     _, ranking, qdrant = services
     ranking.side_effect = error

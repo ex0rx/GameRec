@@ -102,6 +102,219 @@ judged pool consistent when comparing runs.
   lexical and vector retrieval, and better query understanding. These have not
   been implemented or evaluated.
 
+## Local search explanations (Phase 10B)
+
+The explanation service consumes the Phase 10A PostgreSQL context and calls
+Ollama's native `/api/chat` endpoint. It uses a shared async HTTP client, requests
+non-streaming JSON with the Pydantic schema, and validates the returned content.
+It returns `matching_features` and `explanation`, alongside
+separate Ollama timing/token metadata for inspection. Schema validation checks
+format; it does not prove factual correctness.
+
+### On-demand explanation API (Phase 10D)
+
+`POST /explanations/search` reads the selected game's stored PostgreSQL metadata
+and calls the existing explanation service. Ordinary `GET /search/games`
+requests do not generate explanations.
+
+```bash
+curl -X POST http://localhost:8000/explanations/search \
+  -H 'Content-Type: application/json' \
+  -d '{"steam_app_id":108600,"search_query":"Cooperative survival crafting game with challenging bosses"}'
+```
+
+The JSON body requires a positive integer `steam_app_id` and a nonblank string
+`search_query`, with at most 500 characters after trimming surrounding
+whitespace. Numeric strings, booleans and fractional IDs are rejected.
+The response contains only `steam_app_id`, `game_name`, `explanation` and
+`matching_features`; prompts, metadata and inference diagnostics are not
+returned. Games without description, genres or categories receive the existing
+neutral fallback with no model request.
+
+| Condition | HTTP status |
+|---|---:|
+| Invalid request | 422 |
+| Game not stored in PostgreSQL | 404 |
+| Database or Ollama unavailable, including an uninstalled model | 503 |
+| Ollama connection or inference timeout | 504 |
+| Malformed or invalid model output | 502 |
+| Unexpected internal failure | 500 |
+
+Ollama is optional at API startup. Start it with the existing `llm` profile
+below; stopping it makes explanation requests with descriptive evidence fail
+with 503 while ordinary search remains available when its own dependencies
+are running. Explanations are generated per request, without caching or database
+writes. Partial matches are allowed, and reasonable inference and established
+model knowledge remain permitted. Generated claims can still be wrong; the
+Phase 10C evaluation does not establish universal factual accuracy.
+
+Configure `OLLAMA_BASE_URL` (default `http://ollama:11434`), `OLLAMA_MODEL`
+(default `qwen3:4b-instruct`), `OLLAMA_CONNECT_TIMEOUT` (5 seconds), and
+`OLLAMA_GENERATION_TIMEOUT` (180 seconds) in the existing `.env` when needed.
+Containers use the `ollama` hostname; host requests use `localhost`. The service
+is under the `llm` profile and publishes port 11434 only on loopback.
+
+Start on CPU, or opt into the NVIDIA reservation with the additional file:
+
+```bash
+# CPU-compatible default
+docker compose --profile llm up -d ollama
+
+# NVIDIA GPU, with Docker/driver support
+docker compose -f compose.yml -f compose.ollama-gpu.yml --profile llm up -d ollama
+```
+
+Pull the model once, inspect it, and make a simple non-streaming chat request:
+
+```bash
+docker compose exec -T ollama ollama pull qwen3:4b-instruct
+docker compose exec -T ollama ollama list
+
+curl http://localhost:11434/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"qwen3:4b-instruct","messages":[{"role":"user","content":"Say hello in one sentence."}],"stream":false}'
+```
+
+Models live in the named `ollama_models` volume mounted at `/root/.ollama`.
+Container recreation keeps them; the startup command does not pull models.
+The official image is `ollama/ollama:latest`, so record the image version/digest
+when comparing results across updates. Local cloud features are disabled.
+
+Verify GPU use after inference rather than relying on the reservation alone:
+
+```bash
+# WSL hardware visibility
+/usr/lib/wsl/lib/nvidia-smi -L
+# Loaded model residency: PROCESSOR should report GPU or a CPU/GPU split
+docker compose exec -T ollama ollama ps
+# GPU activity during generation
+/usr/lib/wsl/lib/nvidia-smi --query-gpu=name,utilization.gpu,memory.used --format=csv
+docker compose logs --tail 40 ollama
+```
+
+To switch to CPU, recreate only Ollama with the base file; model storage remains:
+
+```bash
+docker compose -f compose.yml --profile llm up -d --force-recreate ollama
+```
+
+Verify actual stored metadata for Project Zomboid, Cyberpunk 2077, and Quake:
+
+```bash
+docker compose up -d api
+docker compose exec -T api python -m gamerec.scripts.verify_search_explanations
+```
+
+The script shares one client across the examples, prints metadata retrieval
+and generation latency separately, and reports Ollama token counts and
+durations (nanoseconds). If a preferred game lacks descriptive evidence, it
+prints its substitution: Valheim, The Witcher 3, or DOOM respectively. Generated
+text is printed and is not saved to PostgreSQL. Insufficient contexts get a
+fixed response without an Ollama request. Network, timeout, missing-model, and
+invalid-output failures raise explicit errors without retries or invented
+responses.
+
+The prompt explains why an already selected game may interest the user, targeting
+1–2 natural sentences of approximately 30–60 words. Steam metadata is preferred,
+with reasonable gameplay inference and well-established game knowledge allowed.
+Model knowledge is not independently verified and must not be attributed to Steam
+or PostgreSQL when the supplied context does not contain it. Uncertain specifics
+should be omitted or qualified, especially for unfamiliar titles. Explicit
+metadata contradictions take precedence; a
+single-player category alone does not establish that multiplayer is absent.
+The response has no limitations field or separate evidence classifications.
+The query is supplied separately from the quoted metadata block, which is treated
+as untrusted data. Model claims still need manual inspection; prompt instructions
+and structured JSON are not a factual verification mechanism. CPU inference
+can be slower, and the first inference may include model loading. Description
+formatting retains Phase 10A's 1,000-character cap.
+
+Verified on 9 October 2026 with Ollama 0.40.2 and model ID `0edcdef34593`:
+the model survived container recreation, and `ollama ps` reported 100% GPU
+residency on an RTX 4080. The three real-metadata examples took approximately
+0.95–1.20 seconds per warm generation. An initial cold request took 36.8 seconds,
+including about 21 seconds of model loading. These are individual verification
+requests, not a latency benchmark or proof of grounding across other queries.
+
+The recommendation-focused refinement removed the required limitations field
+after confirming that it had no public API consumers. Strict JSON validation,
+the no-request insufficient-information fallback, and existing Ollama error
+handling are preserved. Automated tests verify these contracts; they do not
+establish the truth of model-generated claims. The JSON schema cannot enforce
+semantic grounding, inference qualification or prose length.
+
+The Phase 10B recommendation prompt was compared with the previous style on identical
+saved contexts for the three examples, using the same model and settings. Each
+had two sentences and roughly 30–60 words; individual warm requests took
+0.49–0.63 seconds versus 0.85–1.10 seconds previously, excluding warm-up.
+Zomboid's output focused on co-op and crafting without a boss disclaimer.
+Cyberpunk described narrative depth, customisation and player agency,
+and Quake asserted pacing and intensity not present in the saved metadata. These
+were failures of the earlier metadata-only policy, not independently established
+factual errors: absence from a short description is not proof of hallucination.
+This small comparison does not establish a reliable overall quality improvement.
+
+## Explanation evaluation (Phase 10C)
+
+The tracked `tests/data/explanation_evaluation_cases.json` contains 18 real
+catalogue game/query pairs: five well-known games, four lower-review selections
+used as a familiarity proxy, three partial matches, three deliberate mismatches,
+and three sparse-metadata cases. Review counts do not establish what the model
+knows. Cases include their selection reasons and no invented descriptions.
+
+Run the revised policy, optionally comparing the exact saved Phase 10B prompt:
+
+```bash
+docker compose exec -T api python -m gamerec.scripts.evaluate_explanations \
+  --compare-prompt tests/data/explanation_prompt_phase10b.json
+```
+
+The runner reads PostgreSQL once per case, closes the session before inference,
+and shares one async Ollama client. It saves `contexts_<timestamp>.json` before
+generation and `evaluation_<timestamp>.json` afterwards under the existing
+Git-ignored `benchmark_results/explanations/` directory. Each report contains
+the contexts, exact formatted user input, prompts/schema descriptions, outputs,
+errors, token counts and timings. Both policies use identical contexts, model
+and options; the previous schema's descriptions are retained with its prompt.
+The two-field response contract is unchanged. One warm-up per version is excluded
+by default; successful model latency summaries exclude fallbacks and errors.
+There is one measured generation per case/version, suitable for qualitative
+inspection rather than statistical evidence of improvement. At most 20 cases
+can be loaded; generation never runs over the catalogue automatically.
+
+Reuse a saved context snapshot without querying PostgreSQL:
+
+```bash
+docker compose exec -T api python -m gamerec.scripts.evaluate_explanations \
+  --snapshot benchmark_results/explanations/contexts_<timestamp>.json \
+  --compare-prompt tests/data/explanation_prompt_phase10b.json
+```
+
+The evaluation JSON doubles as the human review template. Each generation has
+blank `human_review` fields. Rate factual accuracy, query relevance, usefulness,
+and naturalness from 1 (poor) to 5 (strong). Set `hallucination_detected` to
+`true`, `false`, or `"undetermined"`, with optional notes; leave unreviewed fields
+as `null`. Accuracy concerns the actual game, not verbatim metadata overlap.
+Use independent knowledge or verification where needed; if a claim cannot be
+checked, leave its accuracy score blank and mark the verdict undetermined.
+The generating model never supplies reviewer ratings or factuality verdicts.
+
+After editing the report, validate and summarize only the supplied ratings:
+
+```bash
+docker compose exec -T api python -m gamerec.scripts.evaluate_explanations \
+  --review-file benchmark_results/explanations/evaluation_<timestamp>.json
+```
+
+Review mode performs no metadata retrieval or inference. Means remain `null`
+without ratings; each dimension reports its rated count, and verdict coverage
+distinguishes pending reviews from undetermined judgments. This phase adds no
+claim validator, model judge, external retrieval, API endpoint or ranking change.
+
+References: [Ollama structured outputs](https://docs.ollama.com/capabilities/structured-outputs),
+[chat API](https://docs.ollama.com/api/chat), and
+[Compose GPU reservations](https://docs.docker.com/compose/how-tos/gpu-support/).
+
 ## Recommendation evaluation
 
 With the API, PostgreSQL and Qdrant services running, evaluate the configured

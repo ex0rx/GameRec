@@ -1,0 +1,128 @@
+[
+  {
+    "case_id": "zomboid_coop",
+    "steam_app_id": 108600,
+    "search_query": "Cooperative survival crafting game with challenging bosses",
+    "category": "well_known",
+    "reason": "Repeat the Phase 10B survival case; metadata supports co-op and crafting, while the boss request tests invented complete matches."
+  },
+  {
+    "case_id": "cyberpunk_progression",
+    "steam_app_id": 1091500,
+    "search_query": "Story-driven RPG with deep character progression",
+    "category": "well_known",
+    "reason": "Repeat the Phase 10B RPG case to inspect the use of established game knowledge beyond the short Night City description."
+  },
+  {
+    "case_id": "quake_combat",
+    "steam_app_id": 2310,
+    "search_query": "Fast-paced first-person shooter with intense combat",
+    "category": "well_known",
+    "reason": "Repeat the Phase 10B FPS case; examine familiar-game knowledge without claiming metadata establishes pacing."
+  },
+  {
+    "case_id": "terraria_exploration",
+    "steam_app_id": 105600,
+    "search_query": "Cooperative exploration with building, crafting and boss battles",
+    "category": "well_known",
+    "reason": "Popular catalogue game with explicit building and exploration context; inspect inference and established knowledge."
+  },
+  {
+    "case_id": "baldurs_gate_choices",
+    "steam_app_id": 1086940,
+    "search_query": "Story-rich party RPG with meaningful choices and cooperative play",
+    "category": "well_known",
+    "reason": "Stored story-rich party RPG and co-op information provide a strong supported match."
+  },
+  {
+    "case_id": "tetrapulse_coop",
+    "steam_app_id": 250440,
+    "search_query": "Cooperative action game for a small group of friends",
+    "category": "less_familiar",
+    "reason": "Low-review catalogue selection used as a familiarity proxy; inspect whether vague knowledge invents specifics."
+  },
+  {
+    "case_id": "majestic12_action",
+    "steam_app_id": 350140,
+    "search_query": "Cooperative action adventure with challenging combat",
+    "category": "less_familiar",
+    "reason": "Low-review action/adventure entry; test conservative details for a potentially unfamiliar title."
+  },
+  {
+    "case_id": "baxter_platformer",
+    "steam_app_id": 386460,
+    "search_query": "Platforming adventure with exploration and memorable characters",
+    "category": "less_familiar",
+    "reason": "Low-review Director's Cut entry tests title/edition identity and avoiding borrowed details."
+  },
+  {
+    "case_id": "inside_code_strategy",
+    "steam_app_id": 431470,
+    "search_query": "Strategy RPG with exploration and meaningful character progression",
+    "category": "less_familiar",
+    "reason": "Low-review adventure/RPG/strategy entry; broad labels should not automatically become precise progression mechanics."
+  },
+  {
+    "case_id": "monster_hunter_survival",
+    "steam_app_id": 1446780,
+    "search_query": "Cooperative survival crafting with base building and challenging bosses",
+    "category": "partial_match",
+    "reason": "Monster hunting and co-op are described; inspect whether unrelated survival/base-building requirements are manufactured."
+  },
+  {
+    "case_id": "gunfire_basebuilding",
+    "steam_app_id": 1217060,
+    "search_query": "Cooperative roguelike FPS with elaborate base building",
+    "category": "partial_match",
+    "reason": "FPS, roguelite and co-op are documented; base building is an extra requested constraint, not metadata evidence."
+  },
+  {
+    "case_id": "persona_realtime",
+    "steam_app_id": 1687950,
+    "search_query": "Story-driven RPG with deep progression and real-time combat",
+    "category": "partial_match",
+    "reason": "Stored turn-based RPG description tests an explicit combat-style conflict alongside relevant RPG characteristics."
+  },
+  {
+    "case_id": "zoo_fps",
+    "steam_app_id": 703080,
+    "search_query": "Fast-paced first-person shooter with intense combat",
+    "category": "mismatch",
+    "reason": "Zoo simulation/management is a deliberate genre mismatch; do not fabricate shooter appeal."
+  },
+  {
+    "case_id": "bridge_survival",
+    "steam_app_id": 684410,
+    "search_query": "Cooperative zombie survival crafting game with challenging bosses",
+    "category": "mismatch",
+    "reason": "Bridge puzzle simulation is a deliberate intent mismatch; Single-player alone is not treated as proof of multiplayer absence."
+  },
+  {
+    "case_id": "mahjong_rpg",
+    "steam_app_id": 1954420,
+    "search_query": "Open-world fantasy RPG with character customisation and epic quests",
+    "category": "mismatch",
+    "reason": "Mahjong catalogue entry tests avoiding invented RPG/world features from the query."
+  },
+  {
+    "case_id": "eternal_return_sparse",
+    "steam_app_id": 1049590,
+    "search_query": "Competitive multiplayer survival with crafting and tactical combat",
+    "category": "sparse_metadata",
+    "reason": "Stored genres are empty while description/categories remain available; assess generation from partial metadata."
+  },
+  {
+    "case_id": "cube_escape_sparse",
+    "steam_app_id": 1292940,
+    "search_query": "Atmospheric puzzle exploration with hidden secrets",
+    "category": "sparse_metadata",
+    "reason": "Stored genres are empty; remaining description and categories must be used without inventing missing labels."
+  },
+  {
+    "case_id": "half_life_missing",
+    "steam_app_id": 70,
+    "search_query": "Story-driven first-person shooter with exploration",
+    "category": "sparse_metadata",
+    "reason": "Real Half-Life catalogue row has no description/genres/categories; verify the deterministic no-inference fallback even for a famous title."
+  }
+]

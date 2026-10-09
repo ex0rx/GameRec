@@ -29,6 +29,7 @@ Thumbs.db
 *.log
 benchmark_results/recommendations/
 benchmark_results/search/
+benchmark_results/explanations/
 
 # agents
 .agents

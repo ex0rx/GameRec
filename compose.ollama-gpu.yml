@@ -1,0 +1,10 @@
+# Optional NVIDIA access; the base Compose file remains CPU-compatible.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

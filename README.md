@@ -86,6 +86,22 @@ fully evaluated. Labels for games outside the current top ten are ignored; the
 nDCG ideal ordering uses the judged top-ten games. Keep the query set and
 judged pool consistent when comparing runs.
 
+### Phase 9 verification snapshot (9 October 2026)
+
+- Warm HTTP search latency was approximately **73–75 ms median** across the
+  three measured queries. This was measured from inside the API container, with
+  two warm-ups and 20 sequential requests per query; it excludes model startup
+  and host-network latency.
+- The evaluation exported **12 queries and 120 top-ten results**. Manual
+  relevance labels are pending (0 of 120 results labelled), so Precision@10,
+  nDCG@10, and average graded relevance@10 have not been calculated.
+- Broad queries and queries with several constraints sometimes return games
+  that appear to match only part of the intent. This is an inspection note,
+  not a measured relevance result.
+- Possible future improvements are richer game-text embeddings, combined
+  lexical and vector retrieval, and better query understanding. These have not
+  been implemented or evaluated.
+
 ## Recommendation evaluation
 
 With the API, PostgreSQL and Qdrant services running, evaluate the configured

@@ -8,6 +8,7 @@ __pycache__/
 # Environment variables / secrets
 .env
 .env.*
+!.env.example
 
 # Test / lint / type-check caches
 .pytest_cache/
@@ -27,6 +28,7 @@ Thumbs.db
 # Logs
 *.log
 benchmark_results/recommendations/
+benchmark_results/search/
 
 # agents
 .agents

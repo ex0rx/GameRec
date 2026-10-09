@@ -1,18 +1,13 @@
 import asyncio
 
-from sentence_transformers import SentenceTransformer
-
-from gamerec.core.config import settings
 from gamerec.db import SessionLocal, engine
+from gamerec.ml.embedding_model import load_embedding_model
 from gamerec.services.game_embeddings import process_game_embeddings
 
 
 async def main() -> None:
     try:
-        model = SentenceTransformer(
-            settings.embeddings_model_name,
-            revision=settings.embeddings_model_revision,
-        )
+        model = load_embedding_model()
 
         async with SessionLocal() as db:
             stats = await process_game_embeddings(

@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     embeddings_model_name: str
     embeddings_model_revision: str
     embeddings_vector_size: int = 384
+    embedding_service_url: str = "http://embeddings:8100"
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
     qdrant_game_collection: str

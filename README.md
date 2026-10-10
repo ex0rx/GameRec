@@ -315,6 +315,56 @@ References: [Ollama structured outputs](https://docs.ollama.com/capabilities/str
 [chat API](https://docs.ollama.com/api/chat), and
 [Compose GPU reservations](https://docs.docker.com/compose/how-tos/gpu-support/).
 
+### Explanation reliability and performance (Phase 10E)
+
+Benchmark the actual FastAPI endpoint with the existing Zomboid, Cyberpunk,
+Quake, Terraria and Tetrapulse evaluation cases:
+
+```bash
+docker compose exec -T api python -m gamerec.scripts.benchmark_explanations \
+  --base-url http://127.0.0.1:8000 --repetitions 4 \
+  --concurrency 1 2 5 --warmups 2 --timeout 240
+```
+
+Repetitions are **per case**: defaults produce 20 measured requests at each
+concurrency level and two excluded sequential warm-ups before each level.
+`--concurrency 2` measures just that level. `--output path/to/report.json`
+selects a new report path; otherwise a timestamped JSON file is written under
+`benchmark_results/explanations/`. Existing files are not overwritten.
+
+The report records request IDs, status, latency and error category; successful
+and failed latency statistics are separate. It includes mean, median,
+nearest-rank p95, minimum, maximum, timeout/error counts and throughput over the
+complete measured batch. Request latency starts after acquiring the benchmark
+semaphore; offsets and peak in-flight counts document overlap. Failed warm-ups
+are retained and flagged. Empty-success latency statistics are `null`.
+
+The public API provides no inference diagnostics. For separate native service
+timings, reuse `verify_search_explanations`; its Ollama durations are nanoseconds,
+so divide by 1,000,000 for milliseconds. These are separate requests and cannot
+be subtracted from HTTP measurements to reconstruct exact API overhead.
+
+For a manual cold-model measurement, send an empty
+[generate request](https://docs.ollama.com/api/generate) with
+`{"model":"qwen3:4b-instruct","keep_alive":0,"stream":false}` to Ollama,
+then verify that the model is absent from
+[`GET /api/ps`](https://docs.ollama.com/api/ps) before timing one explanation
+API request. Keep this request separate from the warm benchmark. This measures
+an unloaded model in memory; filesystem caches are not cleared.
+
+The local Phase 10E run used an RTX 4080 with verified GPU residency. Across
+20 requests per level, warm median/p95 HTTP latency was approximately
+637/811 ms at concurrency 1, 1,217/1,442 ms at 2 and 3,144/3,231 ms at 5.
+Throughput stayed near 1.5–1.6 requests/second; all 60 requests succeeded.
+The verified cold-model request took 4.84 seconds. See
+`benchmark_results/explanations/phase10e_report.md` for environment, separate
+internal timings and outage/recovery evidence.
+
+These are small local measurements dependent on hardware, model size and
+system load, not evidence of production scalability. Phase 10C factuality and
+usefulness reviews remain separate and pending. No queues, concurrency limits,
+caching, prompt optimisation or ranking changes were introduced.
+
 ## Recommendation evaluation
 
 With the API, PostgreSQL and Qdrant services running, evaluate the configured

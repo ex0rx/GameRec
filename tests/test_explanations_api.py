@@ -304,3 +304,65 @@ async def test_search_does_not_generate_explanations(client, monkeypatch, model)
     generate.assert_not_awaited()
     assert model.clients == []
     qdrant.close.assert_awaited_once_with()
+
+
+async def test_search_remains_available_after_explanation_failure(
+    client, monkeypatch, model
+):
+    model.error = httpx.ConnectError("private model failure")
+    failed = await client.post("/explanations/search", json=REQUEST)
+    assert failed.status_code == 503
+    monkeypatch.setattr(
+        search, "get_query_embedding", AsyncMock(return_value=[0.0] * 384)
+    )
+    monkeypatch.setattr(
+        search,
+        "hybrid_search_games",
+        AsyncMock(return_value=HybridSearchResult([], 0, frozenset(), frozenset(), [])),
+    )
+    qdrant = Mock(close=AsyncMock())
+    monkeypatch.setattr(search, "get_qdrant_client", lambda: qdrant)
+    response = await client.get("/search/games?query=survival")
+    assert response.status_code == 200
+    assert len(model.requests) == 1
+    assert model.clients[0].is_closed
+    qdrant.close.assert_awaited_once_with()
+
+
+async def test_recommendation_retrieval_and_ranking_do_not_use_ollama(
+    monkeypatch, fake_db
+):
+    from gamerec.integrations import ollama
+    from gamerec.services import search_explanation, user_recommendation
+    from gamerec.services.hybrid_user_recommendation import rank_candidates
+
+    forbidden = Mock(side_effect=AssertionError("Recommendations must not use Ollama"))
+    monkeypatch.setattr(ollama, "create_ollama_client", forbidden)
+    monkeypatch.setattr(ollama, "chat_with_ollama", forbidden)
+    monkeypatch.setattr(search_explanation, "chat_with_ollama", forbidden)
+    monkeypatch.setattr(search_explanation, "generate_search_explanation", forbidden)
+    monkeypatch.setattr(
+        user_recommendation, "get_representative_seed_games", AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        user_recommendation,
+        "fetch_game_vectors",
+        AsyncMock(return_value={10: [1.0, 0.0]}),
+    )
+    qdrant = SimpleNamespace(
+        query_points=AsyncMock(
+            return_value=SimpleNamespace(
+                points=[
+                    SimpleNamespace(
+                        id=10, score=0.8, payload={"name": "Synthetic game"}
+                    )
+                ]
+            )
+        )
+    )
+    result = await user_recommendation.get_multi_source_recommendation_candidates(
+        fake_db, qdrant, "synthetic-user", [1.0, 0.0], set()
+    )
+    ranked = rank_candidates(result.candidates, {}, {})
+    assert [candidate.steam_app_id for candidate in ranked] == [10]
+    forbidden.assert_not_called()

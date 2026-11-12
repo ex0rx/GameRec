@@ -1,0 +1,8 @@
+node_modules
+dist
+test-results
+live-results
+playwright-report
+.env
+.env.*
+!.env.example

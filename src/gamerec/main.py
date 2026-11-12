@@ -8,6 +8,7 @@ from redis.exceptions import RedisError
 from gamerec.api.explanations import router as explanations_router
 from gamerec.api.games import router as games_router
 from gamerec.api.health import router as health_router
+from gamerec.api.recommendations import router as recommendations_router
 from gamerec.api.search import router as search_router
 from gamerec.api.users import router as users_router
 from gamerec.core.config import settings
@@ -45,3 +46,4 @@ app.include_router(games_router)
 app.include_router(search_router)
 app.include_router(explanations_router)
 app.include_router(users_router)
+app.include_router(recommendations_router)

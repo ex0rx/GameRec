@@ -40,3 +40,10 @@ docs
 # md
 AGENTS.md
 SETUP.md
+
+# Frontend dependencies, build output and browser verification artifacts
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/live-results/
+frontend/playwright-report/

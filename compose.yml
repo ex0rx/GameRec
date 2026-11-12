@@ -7,9 +7,33 @@ services:
       - .:/app
     env_file:
       - .env
+    environment:
+      EXPLANATION_CACHE_ENABLED: ${EXPLANATION_CACHE_ENABLED:-true}
+      EXPLANATION_CACHE_VERSION: ${EXPLANATION_CACHE_VERSION:-v1}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
       db:
         condition: service_healthy
+
+  redis:
+    image: redis:8-alpine
+    # Reserve container memory for Redis overhead beyond its cached values.
+    command:
+      - redis-server
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    mem_limit: 128m
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 5s
+      timeout: 2s
+      retries: 5
 
   embeddings:
     build:

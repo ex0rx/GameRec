@@ -17,6 +17,7 @@ os.environ.update(
     HF_HUB_OFFLINE="1",
     TRANSFORMERS_OFFLINE="1",
     STEAMID64_TEST="synthetic-user",
+    EXPLANATION_CACHE_ENABLED="false",
 )
 
 
@@ -60,6 +61,25 @@ def fake_db():
     transaction.__aexit__.return_value = False
     db.begin = Mock(return_value=transaction)
     return db
+
+
+@pytest.fixture
+def fake_redis():
+    """A controlled clock for cache API tests; no Redis server is contacted."""
+    state = SimpleNamespace(now=0.0, values={})
+
+    async def get(key):
+        value, expires = state.values.get(key, (None, 0))
+        return value if state.now < expires else None
+
+    async def set_value(key, value, *, ex):
+        state.values[key] = (value, state.now + ex)
+        return True
+
+    state.get = AsyncMock(side_effect=get)
+    state.set = AsyncMock(side_effect=set_value)
+    state.aclose = AsyncMock()
+    return state
 
 
 @pytest.fixture

@@ -7,6 +7,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from gamerec.core.config import settings
 
+OLLAMA_GENERATION_OPTIONS = {"temperature": 0, "num_ctx": 4096, "num_predict": 512}
+
 
 class OllamaUnavailableError(RuntimeError):
     """A transport or server failure; no substitute explanation is generated."""
@@ -74,7 +76,7 @@ async def chat_with_ollama(
                 "messages": messages,
                 "stream": False,
                 "format": response_schema,
-                "options": {"temperature": 0, "num_ctx": 4096, "num_predict": 512},
+                "options": OLLAMA_GENERATION_OPTIONS,
                 "keep_alive": "5m",
             },
         )

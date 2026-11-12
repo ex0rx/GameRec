@@ -128,7 +128,8 @@ The JSON body requires a positive integer `steam_app_id` and a nonblank string
 whitespace. Numeric strings, booleans and fractional IDs are rejected.
 The response contains only `steam_app_id`, `game_name`, `explanation` and
 `matching_features`; prompts, metadata and inference diagnostics are not
-returned. Games without description, genres or categories receive the existing
+returned. The `X-Explanation-Cache` header reports `HIT`, `MISS` or `BYPASS`.
+Games without description, genres or categories receive the existing
 neutral fallback with no model request.
 
 | Condition | HTTP status |
@@ -141,10 +142,10 @@ neutral fallback with no model request.
 | Unexpected internal failure | 500 |
 
 Ollama is optional at API startup. Start it with the existing `llm` profile
-below; stopping it makes explanation requests with descriptive evidence fail
-with 503 while ordinary search remains available when its own dependencies
-are running. Explanations are generated per request, without caching or database
-writes. Partial matches are allowed, and reasonable inference and established
+below. Uncached explanations return 503 when Ollama is stopped; matching Redis
+entries remain available while PostgreSQL is running. Ordinary search remains
+available when its own dependencies are running. Explanation requests perform
+no PostgreSQL writes. Partial matches are allowed, and reasonable inference and established
 model knowledge remain permitted. Generated claims can still be wrong; the
 Phase 10C evaluation does not establish universal factual accuracy.
 
@@ -332,6 +333,10 @@ concurrency level and two excluded sequential warm-ups before each level.
 selects a new report path; otherwise a timestamped JSON file is written under
 `benchmark_results/explanations/`. Existing files are not overwritten.
 
+With Phase 11 caching enabled, the default benchmark records a mixture of
+cache outcomes. Use the Phase 11 baseline procedure below to measure uncached
+generation and inspect `cache_outcomes` when interpreting results.
+
 The report records request IDs, status, latency and error category; successful
 and failed latency statistics are separate. It includes mean, median,
 nearest-rank p95, minimum, maximum, timeout/error counts and throughput over the
@@ -364,6 +369,103 @@ These are small local measurements dependent on hardware, model size and
 system load, not evidence of production scalability. Phase 10C factuality and
 usefulness reviews remain separate and pending. No queues, concurrency limits,
 caching, prompt optimisation or ranking changes were introduced.
+
+## Explanation caching (Phase 11)
+
+Compose enables a disposable Redis cache for successful explanation responses.
+Start it with the API and use the normal explanation endpoint:
+
+```bash
+docker compose up -d --build api redis
+```
+
+`REDIS_URL` defaults to `redis://redis:6379/0`. The service has no published
+host port, no persistence, a 128 MiB container limit and a 96 MiB Redis data
+budget with LRU eviction; the remaining memory allows for server overhead.
+The API owns one async Redis pool and closes it on shutdown. Startup does not
+connect to Redis. Connection and command timeouts default to 100 ms, with no
+automatic retries.
+
+| Setting | Default |
+|---|---|
+| `EXPLANATION_CACHE_ENABLED` | `true` in Compose; `false` outside Compose |
+| `EXPLANATION_CACHE_TTL_SECONDS` | `3600` |
+| `EXPLANATION_CACHE_VERSION` | `v1` |
+| `REDIS_TIMEOUT_SECONDS` | `0.1` |
+
+Every request first loads the current PostgreSQL context. The key hashes the
+normalized query/context, exact prompt, output schema, model/server identity
+and generation options. Whitespace is normalized; query case is preserved.
+Changes select a fresh key automatically. Bump `EXPLANATION_CACHE_VERSION`
+when replacing model weights under the same model tag. Old entries expire
+after the TTL or are evicted under memory pressure.
+
+Redis values contain only the validated `explanation` and `matching_features`.
+Errors and insufficient-information fallbacks are not cached. Corrupt entries
+are treated as misses. Redis read failures bypass the cache; write failures
+still return the generated explanation. Header values mean:
+
+- `HIT`: a valid cached explanation was returned without an Ollama request.
+- `MISS`: a cache lookup required generation; a failed cache write does not
+  change the successful API response.
+- `BYPASS`: caching is disabled, the context needs the fallback, or Redis could
+  not be read. No cache write is attempted after a read failure.
+
+For a fresh comparison, choose a new benchmark namespace and keep Ollama running:
+
+```bash
+phase11_cache_version="bench-$(date +%s)"
+EXPLANATION_CACHE_ENABLED=false EXPLANATION_CACHE_VERSION="$phase11_cache_version" \
+  docker compose up -d --no-deps api
+docker compose exec -T api python -m gamerec.scripts.benchmark_explanations \
+  --scenario baseline --base-url http://127.0.0.1:8000
+
+EXPLANATION_CACHE_ENABLED=true EXPLANATION_CACHE_VERSION="$phase11_cache_version" \
+  docker compose up -d --no-deps api
+docker compose exec -T api python -m gamerec.scripts.benchmark_explanations \
+  --scenario miss --repetitions 1 --concurrency 1 --warmups 0 \
+  --base-url http://127.0.0.1:8000
+docker compose exec -T api python -m gamerec.scripts.benchmark_explanations \
+  --scenario hit --base-url http://127.0.0.1:8000
+
+# Restore the normal configuration; benchmark entries expire automatically.
+docker compose up -d --no-deps api
+```
+
+Scenarios verify response headers and count mismatches as failures. `hit`
+preloads all five cases outside measurements. Defaults measure 20 requests at
+each concurrency level (1, 2, 5); `miss` makes one measured pass over five cases.
+Use `--output` for a new report path, or accept timestamped JSON output.
+Only delete keys belonging to your isolated benchmark namespace; never use
+`FLUSHDB` or `FLUSHALL` against the shared cache.
+
+Local results on **12 November 2026**, RTX 4080 with GPU residency verified:
+
+| Concurrency | Uncached median/p95 | Cache-hit median/p95 | Measured requests per group |
+|---|---:|---:|---:|
+| 1 | 627.9 / 803.8 ms | 2.7 / 3.3 ms | 20 |
+| 2 | 1,210.0 / 1,435.8 ms | 4.0 / 20.2 ms | 20 |
+| 5 | 3,182.9 / 3,218.8 ms | 14.6 / 39.1 ms | 20 |
+
+All 60 baseline, five miss and 60 hit requests succeeded. The five misses had
+a 629.6 ms median; their 1,118.9 ms p95 is the maximum of a very small sample.
+These are local HTTP timings from inside the API container. The short hit
+batches are sensitive to scheduling and database connection-pool warm-up and
+do not establish production throughput. Concurrent identical misses can still
+generate duplicate explanations; cache hits are safe under concurrent requests.
+Human explanation-quality ratings remain pending.
+
+Real Redis expiry, Redis outage/startup/recovery, cached responses during an
+Ollama outage, uncached 503s and model recovery were verified. Search and health
+remained available. The local report is
+`benchmark_results/explanations/phase11_report.md`; raw results follow the
+existing ignored-results convention.
+
+The **Focused checks** GitHub Actions workflow runs on pushes, pull requests
+and manual dispatch. It installs locked Python 3.13 API/dev dependencies and
+runs Ruff plus the focused cache, explanation, search and recommendation tests
+with synthetic settings and mocked external services. Local checks passed;
+the first GitHub run must pass before Phase 11 is marked complete.
 
 ## Recommendation evaluation
 

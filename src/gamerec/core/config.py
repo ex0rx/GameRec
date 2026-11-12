@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3:4b-instruct"
     ollama_connect_timeout: float = Field(default=5.0, gt=0)
     ollama_generation_timeout: float = Field(default=180.0, gt=0)
+    redis_url: str = "redis://redis:6379/0"
+    redis_timeout_seconds: float = Field(default=0.1, gt=0)
+    explanation_cache_enabled: bool = False
+    explanation_cache_ttl_seconds: int = Field(default=3600, gt=0)
+    explanation_cache_version: str = Field(
+        default="v1", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

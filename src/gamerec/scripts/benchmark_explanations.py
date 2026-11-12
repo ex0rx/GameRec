@@ -39,10 +39,13 @@ def benchmark_cases(path: Path) -> list[dict]:
     return [cases[case_id] for case_id in CASE_IDS]
 
 
-async def request_explanation(client: httpx.AsyncClient, case: dict) -> dict:
+async def request_explanation(
+    client: httpx.AsyncClient, case: dict, *, expected_cache_status: str | None = None
+) -> dict:
     started = time.perf_counter()
     status = None
     error = None
+    cache_status = None
     try:
         response = await client.post(
             "/explanations/search",
@@ -52,12 +55,18 @@ async def request_explanation(client: httpx.AsyncClient, case: dict) -> dict:
             },
         )
         status = response.status_code
+        cache_status = response.headers.get("X-Explanation-Cache")
         if status != 200:
             error = HTTP_ERRORS.get(status, "http_error")
         else:
             result = SearchExplanationResponse.model_validate(response.json())
             if result.steam_app_id != case["steam_app_id"]:
                 error = "invalid_api_response"
+            elif (
+                expected_cache_status is not None
+                and cache_status != expected_cache_status
+            ):
+                error = "unexpected_cache_status"
     except httpx.TimeoutException:
         error = "client_timeout"
     except httpx.RequestError:
@@ -72,6 +81,7 @@ async def request_explanation(client: httpx.AsyncClient, case: dict) -> dict:
         "latency_ms": (time.perf_counter() - started) * 1000,
         "succeeded": error is None,
         "error_category": error,
+        "cache_status": cache_status,
     }
 
 
@@ -98,6 +108,11 @@ def summarize_requests(records: list[dict], elapsed_seconds: float) -> dict:
         "timeout_count": timeouts,
         "other_error_count": len(failed) - timeouts,
         "errors_by_category": dict(sorted(errors.items())),
+        "cache_outcomes": dict(
+            sorted(
+                Counter(r.get("cache_status") or "UNREPORTED" for r in records).items()
+            )
+        ),
         "successful_latency_ms": timing(successful),
         "failed_latency_ms": timing(failed),
         "elapsed_seconds": elapsed_seconds,
@@ -115,11 +130,15 @@ async def benchmark_level(
     repetitions: int,
     concurrency: int,
     warmups: int,
+    expected_cache_status: str | None = None,
 ) -> dict:
     if not cases or repetitions <= 0 or concurrency <= 0 or warmups < 0:
         raise ValueError("Cases, repetitions and concurrency must be positive")
     excluded = [
-        await request_explanation(client, cases[i % len(cases)]) for i in range(warmups)
+        await request_explanation(
+            client, cases[i % len(cases)], expected_cache_status=expected_cache_status
+        )
+        for i in range(warmups)
     ]
     semaphore = asyncio.Semaphore(concurrency)
     active = peak = 0
@@ -132,7 +151,9 @@ async def benchmark_level(
             peak = max(peak, active)
             offset = (time.perf_counter() - started) * 1000
             try:
-                record = await request_explanation(client, case)
+                record = await request_explanation(
+                    client, case, expected_cache_status=expected_cache_status
+                )
                 return {
                     **record,
                     "request_index": request_index,
@@ -165,7 +186,14 @@ async def benchmark(
     concurrency_levels: list[int],
     warmups: int,
     timeout: float,
+    scenario: str = "mixed",
 ) -> dict:
+    expected = {"baseline": "BYPASS", "miss": "MISS", "hit": "HIT"}.get(scenario)
+    preloads = (
+        [await request_explanation(client, case) for case in cases]
+        if scenario == "hit"
+        else []
+    )
     levels = []
     for concurrency in concurrency_levels:
         levels.append(
@@ -175,6 +203,7 @@ async def benchmark(
                 repetitions=repetitions,
                 concurrency=concurrency,
                 warmups=warmups,
+                expected_cache_status=expected,
             )
         )
         print(
@@ -195,6 +224,9 @@ async def benchmark(
         "concurrency_levels": concurrency_levels,
         "warmups_per_level": warmups,
         "request_timeout_seconds": timeout,
+        "cache_scenario": scenario,
+        "cache_version": settings.explanation_cache_version,
+        "excluded_preloads": preloads,
         "levels": levels,
         "cold_start": None,
         "internal_ollama_timings": None,
@@ -206,6 +238,7 @@ async def benchmark(
             "p95 uses nearest rank per outcome group; with 20 samples it is the second-slowest.",
             "Model configuration is local benchmark configuration, not verified by the public API.",
             "The public API omits model timings; cold lifecycle and internal timings need separate verification.",
+            "Cache scenario success requires the expected cache header; hits preload all cases outside measurements.",
             "Factuality and usefulness are separate Phase 10C assessments; human labels are pending.",
         ],
     }
@@ -226,6 +259,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--timeout", type=float, default=240.0)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--scenario", choices=("mixed", "baseline", "miss", "hit"), default="mixed"
+    )
     args = parser.parse_args(argv)
     if args.repetitions <= 0 or any(level <= 0 for level in args.concurrency):
         parser.error("repetitions and concurrency must be positive")
@@ -233,6 +269,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("concurrency levels must be distinct")
     if args.warmups < 0 or not isfinite(args.timeout) or args.timeout <= 0:
         parser.error("warmups must be non-negative and timeout finite and positive")
+    if args.scenario == "miss" and (
+        args.repetitions != 1 or args.concurrency != [1] or args.warmups != 0
+    ):
+        parser.error(
+            "miss scenario requires --repetitions 1 --concurrency 1 --warmups 0"
+        )
     url = httpx.URL(args.base_url)
     if (
         url.scheme not in ("http", "https")
@@ -247,6 +289,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 async def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     cases = benchmark_cases(args.cases)
+    if args.output is not None and args.output.exists():
+        raise FileExistsError(args.output)
     async with httpx.AsyncClient(
         base_url=args.base_url, timeout=args.timeout
     ) as client:
@@ -257,6 +301,7 @@ async def main(argv: list[str] | None = None) -> None:
             concurrency_levels=args.concurrency,
             warmups=args.warmups,
             timeout=args.timeout,
+            scenario=args.scenario,
         )
     report["api_base_url"] = args.base_url
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")

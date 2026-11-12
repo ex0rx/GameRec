@@ -13,6 +13,7 @@ from gamerec.api import explanations, search
 from gamerec.db import get_db
 from gamerec.main import app
 from gamerec.schemas.explanation import SearchExplanation
+from gamerec.services.explanation_cache import ExplanationCache, get_explanation_cache
 from gamerec.services.hybrid_search import HybridSearchResult
 
 pytestmark = pytest.mark.asyncio
@@ -86,6 +87,130 @@ async def client(monkeypatch, fake_db, game, model):
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+@pytest.fixture
+def cache(monkeypatch, fake_redis):
+    cache = ExplanationCache(fake_redis, 3600, "api-test")
+
+    async def override_cache():
+        return cache
+
+    monkeypatch.setitem(app.dependency_overrides, get_explanation_cache, override_cache)
+    return cache
+
+
+async def test_repeated_request_uses_cache_and_current_metadata(
+    client, cache, model, fake_db
+):
+    first = await client.post("/explanations/search", json=REQUEST)
+    second = await client.post(
+        "/explanations/search",
+        json={**REQUEST, "search_query": "  Cooperative  survival \n crafting "},
+    )
+    assert first.status_code == second.status_code == 200
+    assert first.headers["X-Explanation-Cache"] == "MISS"
+    assert second.headers["X-Explanation-Cache"] == "HIT"
+    assert first.json() == second.json()
+    assert len(model.requests) == len(model.clients) == 1
+    assert model.clients[0].is_closed
+    assert fake_db.execute.await_count == 2
+
+
+async def test_expired_and_corrupt_entries_regenerate(client, cache, fake_redis, model):
+    await client.post("/explanations/search", json=REQUEST)
+    key = next(iter(fake_redis.values))
+    fake_redis.values[key] = ("bad JSON", 3600)
+    corrupt = await client.post("/explanations/search", json=REQUEST)
+    assert corrupt.headers["X-Explanation-Cache"] == "MISS"
+    fake_redis.now = 3600
+    expired = await client.post("/explanations/search", json=REQUEST)
+    assert expired.headers["X-Explanation-Cache"] == "MISS"
+    assert len(model.requests) == 3
+
+
+async def test_metadata_changes_regenerate_and_missing_game_still_404(
+    client, cache, game, fake_db, model
+):
+    await client.post("/explanations/search", json=REQUEST)
+    game.short_description = "Different gameplay facts."
+    changed = await client.post("/explanations/search", json=REQUEST)
+    assert changed.headers["X-Explanation-Cache"] == "MISS"
+    assert len(model.requests) == 2
+    fake_db.execute.return_value.one_or_none.return_value = None
+    missing = await client.post("/explanations/search", json=REQUEST)
+    assert missing.status_code == 404
+    assert len(model.requests) == 2
+
+
+async def test_cache_hit_still_requires_database(client, cache, fake_db, model):
+    await client.post("/explanations/search", json=REQUEST)
+    fake_db.execute.side_effect = SQLAlchemyError("private storage failure")
+    response = await client.post("/explanations/search", json=REQUEST)
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Explanation temporarily unavailable"}
+    assert len(model.requests) == 1
+
+
+@pytest.mark.parametrize("operation", ["get", "set"])
+async def test_redis_failures_return_generated_explanation(
+    client, cache, model, fake_redis, operation
+):
+    from redis.exceptions import TimeoutError
+
+    getattr(fake_redis, operation).side_effect = TimeoutError("private Redis URL")
+    response = await client.post("/explanations/search", json=REQUEST)
+    assert response.status_code == 200
+    assert response.json()["explanation"] == OUTPUT["explanation"]
+    assert response.headers["X-Explanation-Cache"] == (
+        "BYPASS" if operation == "get" else "MISS"
+    )
+    if operation == "get":
+        fake_redis.set.assert_not_awaited()
+    assert len(model.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "error", [httpx.ConnectError("down"), httpx.ReadTimeout("slow"), "envelope"]
+)
+async def test_generation_errors_never_populate_cache(
+    client, cache, fake_redis, model, error
+):
+    model.error = error
+    response = await client.post("/explanations/search", json=REQUEST)
+    assert response.status_code in (502, 503, 504)
+    fake_redis.set.assert_not_awaited()
+    model.error = None
+    recovered = await client.post("/explanations/search", json=REQUEST)
+    assert recovered.headers["X-Explanation-Cache"] == "MISS"
+    assert len(model.requests) == 2
+
+
+async def test_fallback_bypasses_redis(client, cache, game, fake_redis, model):
+    game.short_description = None
+    game.genres = game.categories = []
+    response = await client.post("/explanations/search", json=REQUEST)
+    assert response.status_code == 200
+    assert response.headers["X-Explanation-Cache"] == "BYPASS"
+    assert response.json()["matching_features"] == []
+    fake_redis.get.assert_not_awaited()
+    fake_redis.set.assert_not_awaited()
+    assert model.requests == []
+
+
+async def test_concurrent_hits_avoid_model_calls(client, cache, model):
+    import asyncio
+
+    await client.post("/explanations/search", json=REQUEST)
+    model.error = httpx.ConnectError("Ollama stopped")
+    results = await asyncio.gather(
+        *(client.post("/explanations/search", json=REQUEST) for _ in range(5))
+    )
+    assert all(
+        r.status_code == 200 and r.headers["X-Explanation-Cache"] == "HIT"
+        for r in results
+    )
+    assert len(model.requests) == len(model.clients) == 1
 
 
 async def test_success_reuses_context_and_model_schema_and_closes_client(

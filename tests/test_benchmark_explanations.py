@@ -251,3 +251,60 @@ async def test_cli_report_serializes_same_workload_each_level_and_closes_client(
     assert all(level["successful_count"] == 20 for level in report["levels"])
     with pytest.raises(FileExistsError):
         await script.main(["--output", str(path), "--base-url", "http://test"])
+    assert len(requests) == 3 * (20 + 2)
+
+
+@pytest.mark.asyncio
+async def test_cache_scenarios_require_observed_headers_and_exclude_preloads():
+    seen = set()
+
+    def handler(request):
+        app_id = json.loads(request.content)["steam_app_id"]
+        response = valid_response(app_id)
+        response.headers["X-Explanation-Cache"] = "HIT" if app_id in seen else "MISS"
+        seen.add(app_id)
+        return response
+
+    cases = [CASE, {**CASE, "case_id": "other", "steam_app_id": 20}]
+    async with httpx.AsyncClient(
+        base_url="http://test", transport=httpx.MockTransport(handler)
+    ) as client:
+        report = await script.benchmark(
+            client,
+            cases,
+            repetitions=2,
+            concurrency_levels=[1, 2],
+            warmups=2,
+            timeout=30,
+            scenario="hit",
+        )
+        wrong = await script.request_explanation(
+            client, CASE, expected_cache_status="MISS"
+        )
+    assert len(report["excluded_preloads"]) == 2
+    assert all(r["cache_status"] == "MISS" for r in report["excluded_preloads"])
+    assert all(
+        l["cache_outcomes"] == {"HIT": 4} and l["successful_count"] == 4
+        for l in report["levels"]
+    )
+    assert wrong["http_status"] == 200
+    assert wrong["succeeded"] is False
+    assert wrong["error_category"] == "unexpected_cache_status"
+
+
+def test_miss_scenario_requires_one_unwarmed_pass():
+    args = script.parse_args(
+        [
+            "--scenario",
+            "miss",
+            "--repetitions",
+            "1",
+            "--concurrency",
+            "1",
+            "--warmups",
+            "0",
+        ]
+    )
+    assert args.scenario == "miss"
+    with pytest.raises(SystemExit):
+        script.parse_args(["--scenario", "miss"])

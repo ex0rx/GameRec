@@ -759,6 +759,198 @@ No manual relevance or explanation-quality labels were added. The shared floor i
 proved with deterministic zero-playtime fixtures; the live chosen games had nonzero
 playtime. Existing best-effort artwork limitations remain.
 
+## Steam authentication — Phase 2A
+
+The backend supports Steam OpenID 2.0 and opaque PostgreSQL sessions. There is no
+frontend sign-in button yet. Existing Library, Recommendations, preference and
+sync endpoints keep their current behaviour; signing in does not protect or
+migrate those endpoints. Phase 2B must adopt authenticated ownership checks.
+
+### Configuration and local startup
+
+Authentication is disabled by default. For the agreed local Vite proxy setup,
+configure the private backend `.env` (these values contain no Steam credentials):
+
+```dotenv
+AUTH_ENABLED=true
+AUTH_PUBLIC_BASE_URL=http://localhost:5173/api
+AUTH_FRONTEND_ORIGIN=http://localhost:5173
+AUTH_SUCCESS_PATH=/discover
+AUTH_SESSION_TTL_SECONDS=604800
+AUTH_LOGIN_TTL_SECONDS=600
+AUTH_COOKIE_SECURE=false
+AUTH_SESSION_COOKIE_NAME=gamerec_session
+AUTH_LOGIN_COOKIE_NAME=gamerec_login
+```
+
+`AUTH_COOKIE_SECURE=false` is an explicit override restricted to HTTP loopback
+URLs in development. The code defaults to Secure=true; non-development/HTTPS
+configuration requires HTTPS public URLs and secure cookies. Cookie base names
+must be distinct simple identifiers. Unsafe origins, credentials/query/fragment
+in URLs and nonlocal success paths are rejected when auth is enabled. Disabled
+auth needs no origin configuration and returns safe 503s on its endpoints.
+
+This phase uses the existing services and a reviewed, handwritten additive
+migration, **7c91f6a2d804** after **2f86da100328**:
+
+```bash
+docker compose --profile frontend up -d api db frontend
+# Inspect the migration before applying it on another checkout/environment.
+docker compose exec -T api uv run --no-sync alembic upgrade 7c91f6a2d804
+docker compose up -d --no-deps api
+```
+
+The current local workspace has already received this migration and local config.
+Use **localhost:5173** consistently; switching between localhost and 127.0.0.1
+changes cookie hosts. Production needs an equivalent same-origin HTTPS proxy.
+SameSite=Lax does not support an unrelated cross-site frontend through ordinary
+credentialed fetches; that deployment topology is not provided here.
+
+### Endpoint contracts and flow
+
+Public proxy paths have `/api` before the following backend routes:
+
+| Endpoint | Behaviour |
+|---|---|
+| `GET /auth/steam/login` | Set a temporary protected cookie and redirect to Steam with 303 |
+| `GET /auth/steam/callback` | Verify the browser-bound assertion, set session cookie, clear temporary cookie and redirect to configured `/discover` |
+| `GET /auth/me` | Return only `{"steamid64":"<verified account>"}`, or 401 |
+| `POST /auth/logout` | Require trusted request origin, delete the current session and clear cookies; idempotent 204 |
+
+A login creates independent 32-byte random public and private values. Only the
+private cookie's SHA-256 hash is stored. The public `login_id` is included inside
+`openid.return_to` and is not a bearer session token. Callback processing requires
+the matching private HttpOnly cookie and an unexpired, unused transaction. The
+transaction is atomically consumed before provider verification; failures require
+a fresh sign-in and no assertion is automatically retried. Malformed/unbound
+callbacks do not clear an unrelated pending browser transaction.
+
+The Steam-specific async verifier uses the fixed HTTPS Steam endpoint, validates
+namespace/provider/identity/return URL and required signed fields, rejects duplicate
+or conflicting parameters, and forwards assertion values unchanged with
+`openid.mode=check_authentication`. Additional valid signed fields, including the
+signed-field list itself, remain intact. A positive Steam verification response
+and matching bounded Steam HTTPS XRDS discovery are required before using the
+SteamID64. HTTP identity URL labels documented by Steam are accepted as identifiers;
+all network traffic still uses HTTPS with certificate verification enabled.
+See [Steam authentication](https://partner.steamgames.com/doc/features/auth) and
+[OpenID verification](https://openid.net/specs/openid-authentication-2_0.html#verification).
+
+Nonces must use the expected UTC format, be at most 10 minutes old and no more
+than two minutes in the future. PostgreSQL enforces unique accepted nonce hashes.
+Remote verification/discovery has a 20-second overall budget, five-second connect
+limit, bounded response bodies, no redirects and no automatic retries. Clients
+and response streams close on failure/cancellation.
+
+On success, a single transaction records the verified nonce, inserts or reuses the
+existing `User.steamid64` key, revokes the presented previous session and stores
+only a SHA-256 hash of a new 32-byte opaque token. The raw token exists only in
+memory and the browser cookie. Login does not import Steam data, create ownership,
+reset preferences or call Qdrant/Ollama. The session has fixed seven-day expiry;
+activity does not extend it. Logout affects the current session, not other browsers.
+
+### Storage, cookies, CSRF and privacy
+
+The migration adds only `auth_sessions` and `steam_login_transactions`, their
+primary/unique/foreign-key constraints and expiry indexes. Consumed transactions
+retain nonce hashes until their acceptance window closes, including after logout.
+Login traffic removes at most 100 expired rows per auth table per request; nonce
+retention is respected. Expiry checks work even when cleanup has not run. Downgrade
+removes only these auth tables and therefore invalidates authentication state.
+
+Both cookies are HttpOnly, host-only and explicitly SameSite=Lax. HTTPS uses
+`__Host-` prefixes, no Domain attribute and explicit Path=/, required for browser
+host binding; local HTTP uses unprefixed names. No token is put in JSON or browser
+storage. `get_current_user` in `gamerec.api.auth` resolves only an existing,
+unexpired session and User. Duplicate/malformed cookies are rejected.
+
+Logout's reusable trusted-origin guard checks the exact configured Origin. Only
+when Origin is absent may Referer establish a trusted origin; missing/null or
+untrusted sources receive 403. It never derives trust from Host/forwarded headers.
+The cross-site Steam callback uses the independent login-transaction protection
+rather than the logout Origin rule. CORS permits credentials only for the explicit
+frontend origin, with explicit methods/headers; it is not the CSRF defense.
+Vite's own CORS layer is disabled so it cannot overlay broader headers or intercept
+API preflight decisions. Same-origin frontend operations need no Vite CORS layer.
+
+Auth responses carry `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+Application/Uvicorn callback logs redact query strings; HTTPX/HTTPcore redact
+identity URLs, and Vite sanitises callback proxy errors before its default logger.
+Expected failures log only safe categories. Deployment must separately redact
+callback queries at ingress/CDN/proxy logs and avoid credential/wire logging.
+TLS termination, trusted origins and proxy configuration remain deployment duties;
+local HTTP verification does not establish production-ready security.
+
+Invalid/replayed callbacks use safe 400 errors; malformed provider responses 502,
+provider/database unavailability 503 and timeouts 504. No error echoes assertions,
+cookies, SQL parameters or account identities. Existing user-specific authorisation
+is deliberately unchanged until Phase 2B, including development write allowlists.
+
+### Automated and manual verification
+
+Focused backend checks:
+
+```bash
+uv run pytest -q tests/test_steam_openid.py tests/test_auth_config.py tests/test_auth_api.py tests/test_auth_privacy.py
+# Only with TEST_POSTGRES_ADMIN_URL targeting a dedicated /gamerec_test_admin DB:
+uv run pytest -q --run-integration tests/integration/test_auth_sessions.py tests/integration/test_auth_migration.py
+```
+
+Existing frontend typecheck/lint/build and mocked-browser commands still apply.
+A separate non-login HTTP check against the running proxy is available using the
+same matched browser-container command above, replacing `npm test` with:
+
+```bash
+npm run test:auth:live
+```
+
+It checks redirect/cookie attributes, 401/403/204 behaviour and trusted/untrusted
+CORS without following Steam or entering credentials. It creates only short-lived
+login transactions. Traces, video and screenshots are disabled; retained evidence
+contains status/boolean values, never cookies or assertions.
+
+**Local status — 13 November 2026:** migration SQL reviewed, applied from the
+verified previous head, existing data fingerprints unchanged, and `alembic check`
+reports no new operations. **610 focused Python tests**, **62 isolated PostgreSQL
+tests**, and **100 mocked browser checks** pass. TypeScript, ESLint, production
+build, repository Ruff and affected Python formatting checks pass. One separate
+live HTTP proxy check passes without Steam credential entry. Actual proxy checks
+confirm trusted preflight 200, untrusted
+preflight 400, no credentialed read permission for another localhost origin,
+protected temporary cookies, private response headers and actual Uvicorn callback
+query redaction. Evidence is under ignored `frontend/live-results/auth/`.
+**Real Steam sign-in, authenticated `/auth/me`, real logout and second-login data
+preservation remain pending the assisted browser check.** No live login is claimed.
+
+Manual checklist (use your browser, not test automation):
+
+1. Open **http://localhost:5173/api/auth/steam/login** and authenticate only on
+   Steam's HTTPS site, using the account whose library is already stored.
+2. After returning to Discover, privately inspect `/api/auth/me`; confirm the
+   returned identity matches your account without sharing it.
+3. In browser DevTools → Application → Cookies, confirm `gamerec_session` is
+   HttpOnly, SameSite=Lax and host-only. The temporary login cookie is cleared.
+4. From the Discover tab's Console, run the following and retain only statuses:
+
+```javascript
+console.log((await fetch('/api/auth/me')).status) // 200
+console.log((await fetch('/api/auth/logout', { method: 'POST' })).status) // 204
+console.log((await fetch('/api/auth/me')).status) // 401
+```
+
+5. Open the login URL again, sign in and confirm `/auth/me` returns 200. Verify
+   existing Library/preferences remain intact; the prepared database fingerprints
+   allow a separate read-only comparison.
+6. Share only statuses/error codes and whether cookie/identity checks passed.
+   Do not share passwords, SteamID64, cookies, full callback URLs, screenshots of
+   Steam credential entry, or exported authentication network traces.
+
+Phase 2B must migrate user-specific routes to `get_current_user`, use the CSRF
+origin guard for cookie-authenticated writes, replace allowlist-based ownership
+checks and integrate authenticated identity/cache reset in the frontend. None of
+that migration or frontend authentication UI is implemented in Phase 2A. Existing
+CI removal remains intentional; checks are local.
+
 ## Natural-language game search
 
 Start the API, the existing embeddings service, PostgreSQL, and Qdrant with a

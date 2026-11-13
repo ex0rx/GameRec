@@ -1,3 +1,4 @@
+from gamerec.models.auth import AuthSession, SteamLoginTransaction
 from gamerec.models.game import Game
 from gamerec.models.game_embedding import GameEmbedding
 from gamerec.models.steam_metadata_failure import SteamMetadataFailure
@@ -7,8 +8,10 @@ from gamerec.models.user_game import UserGame
 from gamerec.models.user_game_preference import UserGamePreference
 
 __all__ = [
+    "AuthSession",
     "Game",
     "GameEmbedding",
+    "SteamLoginTransaction",
     "SteamMetadataFailure",
     "SyncState",
     "User",

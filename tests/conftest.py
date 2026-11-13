@@ -18,6 +18,7 @@ os.environ.update(
     TRANSFORMERS_OFFLINE="1",
     STEAMID64_TEST="synthetic-user",
     EXPLANATION_CACHE_ENABLED="false",
+    AUTH_ENABLED="false",
 )
 
 

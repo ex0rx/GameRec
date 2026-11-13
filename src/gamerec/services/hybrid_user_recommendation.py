@@ -9,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gamerec.models.game import Game
 from gamerec.models.user_game import UserGame
 from gamerec.models.user_game_preference import UserGamePreference
-from gamerec.services.user_profile import PREFERENCE_WEIGHTS, UNRATED_WEIGHT
+from gamerec.services.user_profile import (
+    PREFERENCE_WEIGHTS,
+    UNRATED_WEIGHT,
+    apply_explicit_playtime_floor,
+)
 
 RECENCY_HALF_LIFE_YEARS = 15.0
 DAYS_PER_YEAR = 365.25
@@ -453,6 +457,9 @@ def build_user_affinity_profile(
     )
 
     for game, playtime_weight in zip(games, playtime_weights, strict=True):
+        playtime_weight = apply_explicit_playtime_floor(
+            playtime_weight, game.preference
+        )
         if playtime_weight <= 0:
             continue
 

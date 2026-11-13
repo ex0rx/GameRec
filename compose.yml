@@ -1,4 +1,16 @@
 services:
+  frontend:
+    build: ./frontend
+    profiles: [frontend]
+    ports:
+      - "127.0.0.1:5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+      API_PROXY_TARGET: ${API_PROXY_TARGET:-http://api:8000}
+
   api:
     build: .
     ports:
@@ -9,6 +21,8 @@ services:
       - .env
     environment:
       EXPLANATION_CACHE_ENABLED: ${EXPLANATION_CACHE_ENABLED:-true}
+      MANUAL_LIBRARY_SYNC_ENABLED: ${MANUAL_LIBRARY_SYNC_ENABLED:-false}
+      USER_PREFERENCE_WRITES_ENABLED: ${USER_PREFERENCE_WRITES_ENABLED:-false}
       EXPLANATION_CACHE_VERSION: ${EXPLANATION_CACHE_VERSION:-v1}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     depends_on:
@@ -85,6 +99,7 @@ services:
       - ollama_models:/root/.ollama
 
 volumes:
+  frontend_node_modules:
   postgres_data:
   embedding_model_cache:
   qdrant_data:

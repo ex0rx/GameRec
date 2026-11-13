@@ -26,6 +26,7 @@ def game(appid):
         "name": f"Synthetic game {appid}",
         "playtime_forever_minutes": appid * 60,
         "playtime_2weeks_minutes": appid * 5,
+        "preference": None,
     }
 
 
@@ -33,6 +34,8 @@ def library(user=USER_A, games=None, *, timestamp=None, limit=50, offset=0):
     games = [] if games is None else games
     return {
         "steamid64": user,
+        "sync_allowed": False,
+        "preference_writes_allowed": False,
         "library_last_synced_at": timestamp,
         "total_games": len(games),
         "limit": limit,

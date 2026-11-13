@@ -60,9 +60,9 @@ def test_capped_playtime_interpolates_and_preserves_input_order():
     assert weights == pytest.approx([log1p(100), 0, log1p(10), log1p(100), 0])
     assert weights == capped_log_playtime_weights(playtimes, percentile=50)
     assert all(isfinite(weight) and weight >= 0 for weight in weights)
-    assert capped_log_playtime_weights([10, 100, 10_000], percentile=100) == pytest.approx(
-        [log1p(10), log1p(100), log1p(10_000)]
-    )
+    assert capped_log_playtime_weights(
+        [10, 100, 10_000], percentile=100
+    ) == pytest.approx([log1p(10), log1p(100), log1p(10_000)])
 
 
 def test_p90_caps_outlier_but_leaves_lower_playtimes_unchanged():
@@ -84,9 +84,7 @@ def test_capped_playtime_rejects_invalid_percentile(percentile):
 
 
 def test_p90_limits_outlier_genre_and_category_influence():
-    games = [
-        played(i, ["Strategy"], categories=["Co-op"]) for i in range(1, 10)
-    ]
+    games = [played(i, ["Strategy"], categories=["Co-op"]) for i in range(1, 10)]
     games += [
         played(10, ["RPG"], categories=["Crafting"]),
         played(11, ["Action"], minutes=10**9, categories=["Single-player"]),
@@ -94,17 +92,23 @@ def test_p90_limits_outlier_genre_and_category_influence():
     kwargs = {"total_games": 0, "genre_counts": {}}
     capped = build_user_affinity_profile(games, **kwargs)
     uncapped = build_user_affinity_profile(games, playtime_percentile=None, **kwargs)
-    assert build_user_affinity_profile(games, playtime_percentile=100, **kwargs) == uncapped
+    assert (
+        build_user_affinity_profile(games, playtime_percentile=100, **kwargs)
+        == uncapped
+    )
 
     assert capped.genres_score["Strategy"] == uncapped.genres_score["Strategy"] == 1.0
     assert 0 < capped.genres_score["Action"] < uncapped.genres_score["Action"]
     assert capped.genres_score["RPG"] > 0
-    assert capped.categories_score["Single-player"] < uncapped.categories_score["Single-player"]
+    assert (
+        capped.categories_score["Single-player"]
+        < uncapped.categories_score["Single-player"]
+    )
     assert capped.categories_score["Crafting"] > 0
     candidate = metadata(12, genres=["Action"])
-    assert build_candidate_affinity_scores({12: candidate}, capped)[12].genres_affinity == pytest.approx(
-        capped.genres_score["Action"]
-    )
+    assert build_candidate_affinity_scores({12: candidate}, capped)[
+        12
+    ].genres_affinity == pytest.approx(capped.genres_score["Action"])
 
 
 def test_capped_affinity_preserves_preference_signs_and_empty_metadata():
@@ -115,7 +119,7 @@ def test_capped_affinity_preserves_preference_signs_and_empty_metadata():
             played(3, ["RPG"], preference=None, categories=["Crafting"]),
             played(4, ["Adventure"], preference="neutral", categories=["Exploration"]),
             played(5, None, minutes=100, categories=None),
-            played(6, ["No-play"], minutes=0, categories=["None"]),
+            played(6, ["No-play"], preference=None, minutes=0, categories=["None"]),
         ],
         total_games=0,
         genre_counts={},
@@ -123,9 +127,14 @@ def test_capped_affinity_preserves_preference_signs_and_empty_metadata():
 
     assert profile.genres_score["Action"] == 1.0
     assert profile.genres_score["Puzzle"] < 0 < profile.genres_score["RPG"]
-    assert profile.categories_score == pytest.approx({
-        "Co-op": 1.0, "Solo": -0.6, "Crafting": 0.5, "Exploration": 0.4,
-    })
+    assert profile.categories_score == pytest.approx(
+        {
+            "Co-op": 1.0,
+            "Solo": -0.6,
+            "Crafting": 0.5,
+            "Exploration": 0.4,
+        }
+    )
     assert "No-play" not in profile.genres_score
 
 
@@ -136,7 +145,10 @@ def test_capped_affinity_preserves_preference_signs_and_empty_metadata():
         (AS_OF, 1.0),
         (AS_OF + timedelta(days=365), 1.0),
         (AS_OF - timedelta(days=round(RECENCY_HALF_LIFE_YEARS * DAYS_PER_YEAR)), 0.5),
-        (AS_OF - timedelta(days=round(2 * RECENCY_HALF_LIFE_YEARS * DAYS_PER_YEAR)), 0.25),
+        (
+            AS_OF - timedelta(days=round(2 * RECENCY_HALF_LIFE_YEARS * DAYS_PER_YEAR)),
+            0.25,
+        ),
     ],
 )
 def test_recency_half_life_missing_future_and_bounds(release, expected):
@@ -292,9 +304,12 @@ def test_excluded_candidate_labels_neither_boost_nor_dilute_affinity():
     assert scores[4].genres_affinity == scores[4].affinity_score == 0.0
 
 
-def test_zero_playtime_keeps_existing_affinity_behaviour():
+def test_zero_playtime_unrated_and_legacy_neutral_remain_implicit():
     profile = build_user_affinity_profile(
-        [played(1, ["Action"], minutes=0), played(2, ["RPG"], minutes=None)],
+        [
+            played(1, ["Action"], preference=None, minutes=0),
+            played(2, ["RPG"], preference="neutral", minutes=None),
+        ],
         total_games=0,
         genre_counts={},
     )

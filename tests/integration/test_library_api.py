@@ -20,6 +20,7 @@ async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_clien
             "name": f"Game {appid}",
             "playtime_forever_minutes": appid,
             "playtime_2weeks_minutes": None,
+            "preference": None,
         }
         for appid in range(65, 0, -1)
     ]
@@ -63,6 +64,7 @@ async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_clien
             "name": "Game 65",
             "playtime_forever_minutes": 999,
             "playtime_2weeks_minutes": None,
+            "preference": None,
         }
     ]
 
@@ -77,6 +79,8 @@ async def test_unknown_and_existing_empty_user_are_distinct(pg_sessions, pg_clie
     assert response.status_code == 200
     assert response.json() == {
         "steamid64": USER_A,
+        "sync_allowed": False,
+        "preference_writes_allowed": False,
         "games": [],
         "total_games": 0,
         "limit": 50,

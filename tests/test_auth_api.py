@@ -416,3 +416,46 @@ async def test_callback_slash_alias_is_rejected_without_forwarding_assertion(
     assert_private_headers(response)
     services.consume_login_transaction.assert_not_called()
     services.verify_assertion.assert_not_called()
+
+
+async def test_session_lookup_finishes_read_transaction_before_handler(
+    client, services, fake_db
+):
+    response = await client.get(
+        "/auth/me", headers={"Cookie": f"gamerec_session={SESSION}"}
+    )
+    assert response.status_code == 200
+    fake_db.begin.assert_called_once_with()
+    fake_db.begin.return_value.__aexit__.assert_awaited_once_with(None, None, None)
+    services.resolve_session_user.assert_awaited_once_with(fake_db, SESSION)
+
+
+async def test_session_lookup_failure_exits_transaction(client, services, fake_db):
+    services.resolve_session_user.side_effect = SQLAlchemyError("synthetic offline")
+    response = await client.get(
+        "/auth/me", headers={"Cookie": f"gamerec_session={SESSION}"}
+    )
+    assert response.status_code == 503
+    exit_call = fake_db.begin.return_value.__aexit__.await_args
+    assert exit_call.args[0] is SQLAlchemyError
+
+
+async def test_session_lookup_cancellation_exits_transaction(client, services, fake_db):
+    import asyncio
+
+    started = asyncio.Event()
+
+    async def stalled(*args):
+        started.set()
+        await asyncio.Event().wait()
+
+    services.resolve_session_user.side_effect = stalled
+    task = asyncio.create_task(
+        client.get("/auth/me", headers={"Cookie": f"gamerec_session={SESSION}"})
+    )
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    exit_call = fake_db.begin.return_value.__aexit__.await_args
+    assert exit_call.args[0] is asyncio.CancelledError

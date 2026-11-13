@@ -9,7 +9,10 @@ from qdrant_client.http.exceptions import ApiException
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from gamerec.api.auth import get_current_user
+from gamerec.core.auth_security import require_account_owner
 from gamerec.db import get_db
+from gamerec.models.user import User
 from gamerec.schemas.recommendation import (
     RecommendationRequest,
     RecommendationResponse,
@@ -26,10 +29,12 @@ logger = logging.getLogger(__name__)
 async def recommend_games(
     request: RecommendationRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ) -> RecommendationResponse:
+    require_account_owner(current_user.steamid64, request.steamid64)
     try:
         ranked = await get_user_recommendations(
-            db, request.steamid64, limit=request.limit
+            db, current_user.steamid64, limit=request.limit
         )
     except UserNotFoundError as exc:
         raise HTTPException(status_code=404, detail="User not found") from exc

@@ -216,7 +216,10 @@ async def test_search_failure_returns_503_and_closes_qdrant(client, services, er
     qdrant.close.assert_awaited_once_with()
 
 
-async def test_existing_user_route_still_works(client, monkeypatch):
-    monkeypatch.setattr(users, "get_user_library", AsyncMock(return_value=None))
-    response = await client.get("/users/synthetic-user/library")
-    assert response.status_code == 404
+async def test_user_route_fails_closed_when_auth_disabled(client, monkeypatch):
+    library = AsyncMock(return_value=None)
+    monkeypatch.setattr(users, "get_user_library", library)
+    response = await client.get("/users/76561190000000001/library")
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "authentication_unavailable"
+    library.assert_not_called()

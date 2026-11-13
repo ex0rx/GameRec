@@ -17,3 +17,8 @@ export function readLibraryPage(params: URLSearchParams): number {
 export function libraryPath(steamId: string, page = 1): string {
   return `/library/${encodeURIComponent(steamId.trim())}${page > 1 ? `?page=${page}` : ''}`
 }
+
+/** The signed-in Library never needs an account identifier in its address. */
+export function myLibraryPath(page = 1): string {
+  return `/library${page > 1 ? `?page=${page}` : ''}`
+}

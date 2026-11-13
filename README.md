@@ -1,5 +1,11 @@
 # GameRec
 
+**Current access policy:** Library, preferences, sync and personalised recommendations
+require a matching Steam session. Public discovery/search/explanations remain open.
+Use **Sign in with Steam** in the app; Library and Recommendations automatically
+use the verified account through either sidebar link. See [Phase 2C](#steam-login-and-account-experience--phase-2c).
+Earlier phase results below are historical; ID-only live launchers are retired.
+
 ## Discovery frontend — Phase 1
 
 A React + strict TypeScript discovery interface lives in `frontend/`. Vite and
@@ -164,11 +170,11 @@ The endpoint uses PostgreSQL and Qdrant with already stored library/preferences
 and current embeddings. It does not fetch Steam data, regenerate embeddings,
 call the query-embedding service or invoke Ollama.
 
-Invalid inputs return 422, an unknown stored user returns 404, and unavailable
+Invalid inputs return 422, a missing own stored user returns 404, and unavailable
 PostgreSQL/Qdrant dependencies return a safe 503. Existing users with no usable
 profile or eligible candidates receive 200 with an empty `games` list. This
-does **not** prove that their Steam library is empty. Authentication is deferred;
-supplying an ID does not verify account ownership or grant access control.
+does **not** prove that their Steam library is empty. Phase 2B now requires a
+matching authenticated session; supplying an ID alone grants no access.
 
 ### Typed frontend seam
 
@@ -196,27 +202,11 @@ dates and artwork metadata are not supplied by this response.
 ### Recommendation verification
 
 Use the regular frontend checks above; `npm test` includes the focused mocked
-recommendation client/hook tests. The live check separately reuses a configured
-`STEAMID64_TEST` from the API container. Set it only in the existing local backend
-`.env`; do not add a personal account ID to source, command examples, committed
-fixtures, or `VITE_*` variables. The account's library and embeddings must already
-be stored; this check does not import or refresh them.
-
-From WSL at the repository root, with Docker running:
-
-```bash
-docker compose --profile frontend up -d --build api frontend qdrant
-python3 frontend/scripts/verify_recommendations.py
-```
-
-If running an API container across source changes, restart it to register the
-new route (`docker compose restart api`). The launcher supports `--project-name`
-for a non-default Compose project and `--base-url` for a different frontend URL.
-It captures the ID without printing it, passes only that ID to the browser
-test environment and redacts it from subprocess diagnostics. Live identifiers
-stay in memory, out of harness inputs. Traces, screenshots and video are disabled
-for this check. Only redacted status/count evidence is saved under
-`frontend/live-results/recommendations/`; the directory is ignored by Git.
+recommendation client/hook tests. The former ID-only launcher is retired because
+it cannot authenticate account ownership. All its modes exit before reading an ID,
+starting a browser or creating recovery data. Use the signed-in browser procedure
+under Phase 2B. No cookie export, seeded development session or auth bypass is used.
+Historical Phase 2 live results below predate this access-policy change.
 
 Local Phase 2 verification on 12 November 2026: the real proxy/client/hook request
 returned HTTP 200 with 20 recommendations in descending hybrid-score order.
@@ -235,16 +225,11 @@ navigation. The page uses the existing `useRecommendations` hook and
 `POST /recommendations` with its default limit of 20. The backend order is kept;
 no browser scoring, new endpoint, library refresh or Ollama call is involved.
 
-In Vite **development mode only**, expand **Development profile**, enter a
-canonical positive unsigned-64-bit Steam ID and select **Load recommendations**.
-This selects an already stored profile for testing; it is not sign-in or proof
-of account ownership. The field is masked and clears on submission. The selected
-ID stays in page memory and the existing in-memory query key, never in URLs,
-local/session storage or `VITE_*` settings. Leaving the page clears its selection;
-**Clear profile** also hides results. Production builds omit the selector and
-show a no-profile placeholder on direct visits. Phase 4 also supports an explicit
-Library-to-Recommendations handoff in both development and production builds.
-Invalid or missing IDs make no recommendation request.
+Phase 2C replaces the former development profile selector with the verified
+`/auth/me` identity in both development and production. Signed-out visitors see a
+sign-in requirement; signed-in users load their own recommendations automatically.
+No account ID is entered, stored in browser storage or passed between pages.
+Both the sidebar and Library's **View recommendations** link work directly.
 
 The page shares discovery's landscape cards, artwork fallbacks and feedback
 components. Missing/blank names display `Steam app <ID>`. Cards omit unavailable
@@ -264,7 +249,8 @@ Run the frontend checks and mocked browser command above. For a separate real
 page check using the configured local `STEAMID64_TEST` privately:
 
 ```bash
-python3 frontend/scripts/verify_recommendations.py --page
+# Retired in Phase 2B; use its signed-in browser verification instead:
+# python3 frontend/scripts/verify_recommendations.py --page
 ```
 
 The launcher reuses the Phase 2 configuration capture and redaction. Live traces,
@@ -300,21 +286,18 @@ account identity and access control before exposing stored libraries to users.
 ## Stored Steam library — Frontend Phase 4
 
 Open **http://localhost:5173/library** or choose **Library** in navigation.
-Enter a SteamID64 to view a library already stored in GameRec. This reads
-PostgreSQL; it does not sign in, verify ownership, import or synchronise Steam
-data. The input and routes are available in development and production builds.
+Sign in with Steam to load your own stored games automatically. The page reads
+PostgreSQL and does not automatically import or synchronise Steam data. Sync is
+an explicit action available to an authenticated owner in all builds.
 
 ```bash
-# Uses the existing configured backend .env and stored database.
 docker compose --profile frontend up -d --build api frontend
 ```
 
-The routes are `/library` and `/library/:steamid64`, with optional `?page=2`.
-IDs are trimmed and must contain exactly 17 ASCII decimal digits. They remain
-strings; no request runs for missing or invalid IDs. The selected ID intentionally
-appears in the shareable URL, browser history and potentially normal access logs.
-It is not proof of account ownership. No additional local/session storage is used.
-Switching IDs resets pagination; reload and Back/Forward restore the URL state.
+The normal route is `/library`, with optional `?page=2`. Reload and Back/Forward
+preserve pagination without putting an account ID in the page URL. Legacy
+`/library/:steamid64` links only redirect when they match the verified owner;
+other/invalid IDs show Library unavailable and do not request that account's data.
 
 ### Data and presentation
 
@@ -359,7 +342,8 @@ The full mocked suite includes 22 new Library cases. For a separate live check
 using the existing locally configured `STEAMID64_TEST`:
 
 ```bash
-python3 frontend/scripts/verify_recommendations.py --library
+# Retired in Phase 2B; use its signed-in browser verification instead:
+# python3 frontend/scripts/verify_recommendations.py --library
 ```
 
 The launcher uses the existing configuration capture and private test environment.
@@ -384,40 +368,27 @@ code is unchanged and its tests were not rerun. CI remains intentionally removed
 Limitations: existing stored data only; authentication/access control, Steam sync,
 preference editing, server-side sorting/filtering and library-wide playtime totals
 remain outside this phase. Artwork is best effort. No relevance-quality claim is
-made. The existing API exposes libraries by supplied ID without ownership checks;
-this is a local prototype, not an authenticated multi-user deployment.
+made. Phase 2B now restricts the full response to the signed-in owner. Public
+SteamID-based browsing is no longer supported by this response contract.
 
 ## Manual Steam library synchronisation — Frontend Phase 5
 
-**Sync Library** is a development-only, explicitly requested refresh of the one
-configured test account. Enable it in the backend's local `.env`:
+**Sync Library** explicitly refreshes the signed-in owner's stored library.
+The backend requires a valid Steam session, matching path ID and trusted request
+origin. `MANUAL_LIBRARY_SYNC_ENABLED` and the `STEAMID64_TEST` allowlist no longer
+control access. `MANUAL_LIBRARY_SYNC_COOLDOWN_SECONDS=60` still controls pacing.
+`sync_allowed` is true in an authorized owner Library response. The current UI
+shows the control for the authenticated owner in development and production,
+using the existing backend capability flag.
 
-```dotenv
-ENVIRONMENT=development
-MANUAL_LIBRARY_SYNC_ENABLED=true
-# Set STEAMID64_TEST privately to the consenting account's 17-digit Steam ID.
-MANUAL_LIBRARY_SYNC_COOLDOWN_SECONDS=60
-```
-
-Recreate the API to load changed settings:
-
-```bash
-docker compose up -d --no-deps api
-```
-
-Enablement defaults to false. The server requires all three checks: development
-environment, enabled flag and exact match to a valid configured `STEAMID64_TEST`.
-Missing/invalid configuration fails closed. `GET /users/{steamid64}/library` adds
-`sync_allowed`; the control appears only in Vite development mode when that value
-is true. A production build omits the action even when a server permits it.
-This is a local development restriction, not authentication or ownership proof.
 Steam must make the account's game details visible to the API; unavailable data
 is not an empty library. See the [official GetOwnedGames documentation](https://partner.steamgames.com/doc/webapi/IPlayerService#GetOwnedGames).
 
 ### Sync contract and behaviour
 
 `POST /users/{steamid64}/library/sync` accepts an exact 17-ASCII-digit string path
-identifier and no request body. It may create the permitted user if not yet stored.
+identifier and no request body. Steam sign-in creates/reuses the User first; an
+authenticated account without stored games can perform its first sync.
 The page exposes the action after an existing library has loaded. A completed
 response contains:
 
@@ -484,7 +455,8 @@ The ordinary `--library` verification remains read-only. This separate mode
 cooldown, persisted count/playtime/timestamp, and masked desktop/mobile layouts:
 
 ```bash
-python3 frontend/scripts/verify_recommendations.py --library-sync
+# Retired in Phase 2B; use its signed-in browser verification instead:
+# python3 frontend/scripts/verify_recommendations.py --library-sync
 ```
 
 Live traces/video/automatic screenshots are off. Explicit screenshots mask
@@ -561,24 +533,11 @@ that boundary while preserving the existing preference and hybrid multipliers.
 
 ### Enable preference editing
 
-Set these in the private backend `.env`, using the existing consenting test
-account (never commit its ID):
-
-```dotenv
-ENVIRONMENT=development
-USER_PREFERENCE_WRITES_ENABLED=true
-# STEAMID64_TEST must already contain the exact permitted 17-digit account ID.
-```
-
-```bash
-docker compose up -d --no-deps api
-```
-
-Refresh the development Library page and load that account. Like and Dislike
-buttons appear only when `import.meta.env.DEV` and the response's
-`preference_writes_allowed` are true. Steam synchronisation does not need to be
-enabled. Other libraries and production builds show read-only preference labels.
-These local restrictions do not authenticate an account owner.
+Sign in through `/api/auth/steam/login`, then load your own Library. The server
+requires a matching session and trusted origin for both PUT and DELETE. The
+former `USER_PREFERENCE_WRITES_ENABLED` flag and test-account allowlist are retired.
+Controls require the verified owner session and `preference_writes_allowed` in
+both development and production builds.
 
 ### Saved preference contract and UI
 
@@ -590,7 +549,8 @@ These local restrictions do not authenticate an account owner.
 - New/updated ratings require stored ownership. Existing unowned legacy records
   remain readable through GET preferences and clearable through DELETE.
 - Write IDs must be exactly 17 ASCII digits. Disallowed writes return **403**
-  (`preference_forbidden`); unknown user/game or unowned PUT target returns **404**
+  (`account_forbidden` or `csrf_failed`); missing/invalid sessions return **401**.
+  Unknown game or unowned PUT target returns **404**
   (`user_not_found`, `game_not_found`, `game_not_owned`); invalid inputs **422**;
   unavailable storage **503** (`database_unavailable`). Errors do not expose SQL
   parameters or raw account IDs.
@@ -681,7 +641,8 @@ games, compares actual HTTP recommendations and profile/affinity signals, and
 clears both test preferences in browser-independent host cleanup:
 
 ```bash
-python3 frontend/scripts/verify_recommendations.py --preferences
+# Retired in Phase 2B; use its signed-in browser verification instead:
+# python3 frontend/scripts/verify_recommendations.py --preferences
 ```
 
 Run it only after enabling development preference writes. It does not sync Steam,
@@ -740,9 +701,8 @@ The complete four-stage top-20 exports, signed signals, configuration and
 comparison are in the local ignored `frontend/live-results/preferences/comparison.json`
 and `report.md`; `recovery.json` confirms restoration. Masked real liked/disliked
 and mocked all-state desktop/mobile screenshots were visually reviewed.
-The API returned to its normal configuration: preference writes default to off;
-the user's existing manual-sync setting was preserved. Use the enablement section
-above to show the preference controls.
+That historical run restored its original configuration. Phase 2B now authorizes
+preference writes through Steam sessions; the old development flags are retired.
 
 Focused commands, alongside the existing frontend checks/browser command:
 
@@ -752,8 +712,8 @@ uv run pytest -q tests/test_preferences_api.py tests/test_preference_feedback.py
 uv run pytest -q --run-integration tests/integration/test_preferences.py tests/integration/test_preference_recommendations.py tests/integration/test_library_api.py
 ```
 
-Limitations: one configured development account, unauthenticated read-only browsing,
-limited indexed catalogue/metadata and no promise that one rating changes a specific
+Historical Phase 1 limitations included one development account and public reads;
+Phase 2B replaces that access policy. Remaining limitations include limited indexed catalogue/metadata and no promise that one rating changes a specific
 rank. Only-dislike histories still return no usable positive recommendation profile.
 No manual relevance or explanation-quality labels were added. The shared floor is
 proved with deterministic zero-playtime fixtures; the live chosen games had nonzero
@@ -761,10 +721,9 @@ playtime. Existing best-effort artwork limitations remain.
 
 ## Steam authentication — Phase 2A
 
-The backend supports Steam OpenID 2.0 and opaque PostgreSQL sessions. There is no
-frontend sign-in button yet. Existing Library, Recommendations, preference and
-sync endpoints keep their current behaviour; signing in does not protect or
-migrate those endpoints. Phase 2B must adopt authenticated ownership checks.
+The backend supports Steam OpenID 2.0 and opaque PostgreSQL sessions. Phase 2B
+connects sessions to owner-only API access; Phase 2C adds frontend sign-in/out and
+automatic account selection.
 
 ### Configuration and local startup
 
@@ -883,8 +842,8 @@ local HTTP verification does not establish production-ready security.
 
 Invalid/replayed callbacks use safe 400 errors; malformed provider responses 502,
 provider/database unavailability 503 and timeouts 504. No error echoes assertions,
-cookies, SQL parameters or account identities. Existing user-specific authorisation
-is deliberately unchanged until Phase 2B, including development write allowlists.
+cookies, SQL parameters or account identities. Phase 2B below replaces the former development write allowlists with session
+ownership checks on user-specific endpoints.
 
 ### Automated and manual verification
 
@@ -945,11 +904,262 @@ console.log((await fetch('/api/auth/me')).status) // 401
    Do not share passwords, SteamID64, cookies, full callback URLs, screenshots of
    Steam credential entry, or exported authentication network traces.
 
-Phase 2B must migrate user-specific routes to `get_current_user`, use the CSRF
-origin guard for cookie-authenticated writes, replace allowlist-based ownership
-checks and integrate authenticated identity/cache reset in the frontend. None of
-that migration or frontend authentication UI is implemented in Phase 2A. Existing
-CI removal remains intentional; checks are local.
+Phase 2B below implements backend ownership checks. Phase 2C implements
+authenticated identity, cache reset and login UI in the frontend. Existing CI
+removal remains intentional; checks are local.
+
+## Authenticated user operations — Phase 2B
+
+Steam sessions are now authoritative for account-specific API access. The existing
+paths and JSON response schemas are retained; no `/users/me` aliases are added.
+An ID in a URL/body selects a target but grants no permission. Services receive the
+verified session ID only after it matches the target.
+
+| Endpoint | Before Phase 2B | Current access |
+|---|---|---|
+| `GET /users/{steamid64}/library` | Public, including preferences/playtime/sync metadata | Signed-in owner |
+| `GET /users/{steamid64}/preferences` | Public | Signed-in owner |
+| `POST /recommendations` | Public ID-based read | Signed-in owner matching body ID |
+| `POST /users/{steamid64}/library/sync` | Development flag + test-account allowlist | Signed-in owner + trusted origin |
+| `PUT /users/{steamid64}/preferences/{steam_app_id}` | Development flag + test-account allowlist | Signed-in owner + trusted origin |
+| `DELETE /users/{steamid64}/preferences/{steam_app_id}` | Development flag + test-account allowlist | Signed-in owner + trusted origin |
+| Search, games, explanations, health | Public | Public |
+| Local importer/diagnostic CLI commands | Administrative environment/DB access | Unchanged administrative access |
+
+There is no public version of the full Library or preference-derived recommendation
+response. Anonymous, malformed, expired and revoked sessions receive **401**;
+cross-account requests receive **403 / account_forbidden**, including unknown target
+accounts. This check precedes private service queries, reservations, Steam and Qdrant.
+An unavailable auth database or disabled authentication returns **503**. Authenticated
+invalid path IDs/preferences/pagination/limits return **422**. Existing missing-game
+and unowned-PUT errors remain **404**, with safe messages. Existing service dependency
+errors remain mapped to their previous statuses.
+
+### Ownership, CSRF and transactions
+
+All six routes reuse `get_current_user` and the shared `require_account_owner`
+check. Session resolution uses the existing hash-only, unexpired session/User join.
+Its short read transaction ends before preference handlers open write transactions;
+`expire_on_commit=False` preserves the loaded identity. No extra auth pool, session
+system or schema is introduced.
+
+Sync, PUT and DELETE reuse `require_trusted_origin`: an exact configured trusted
+Origin is required, with Referer fallback only when Origin is absent. Missing,
+null, duplicate or untrusted origins fail **403 / csrf_failed** before mutation.
+Authentication is checked first, so anonymous writes return 401. CORS is unchanged
+and is not the authorization/CSRF mechanism. The read-only recommendation POST
+requires authentication/ownership but does not add a state-changing operation.
+
+Protected responses, including handled errors, validation failures, preflight and
+unexpected 500s, use `Cache-Control: no-store` and `Referrer-Policy: no-referrer`.
+Unexpected errors retain status 500; they are not relabelled dependency outages.
+
+`MANUAL_LIBRARY_SYNC_ENABLED` and `USER_PREFERENCE_WRITES_ENABLED` have been retired
+from settings, Compose and `.env.example`. Old private `.env` entries are ignored;
+remove them when convenient. `STEAMID64_TEST` remains optional private diagnostic
+configuration, not authentication. An authenticated owner needs neither allowlist
+nor development mode. Both Library capability booleans are true in authorized
+owner responses. `AUTH_ENABLED=false` fails closed instead of restoring the old policy.
+
+Cooldowns, single-worker reservations, timeout limits, enrichment bounds, ownership
+upserts, legacy neutral/unowned clearing and recommendation algorithms are unchanged.
+No migrations or new dependencies are needed. Sync still supports only one API worker;
+newly imported games can remain unindexed until the separate embedding workflow runs.
+
+### Local verification and real-browser check
+
+Local automated checks: **663 focused Python tests** and **123 isolated PostgreSQL
+tests** pass. The database tests use UUID-isolated databases on a disposable test
+server, never the populated development database. They include actual session lookup
+followed by sync/preference commits, cross-account and CSRF preservation checks,
+expired/revoked sessions, and persisted feedback through the real recommendation API
+with only Qdrant mocked. Like/dislike changes controlled profile/affinity/ranking
+signals; clearing restores baseline results. This proves wiring, not relevance quality.
+
+**100 existing mocked browser regressions and four new assisted-helper safety
+checks pass**. TypeScript, ESLint, production build, repository Ruff and affected
+Python formatting checks pass. Through the real Vite proxy, all six anonymous
+account operations returned 401 with privacy headers; public health/games/search
+returned 200 (three search results). These readiness requests performed no sync,
+preference mutation or explanation generation. CI remains intentionally removed.
+The historical ID-only Python launcher now exits with status 2 and a session-required
+message in every mode, before configuration reads, browser startup or recovery files.
+It cannot impersonate an owner or perform unauthenticated cleanup.
+
+The real-browser check remains **pending**. To perform it on your consenting account:
+
+1. Open **http://localhost:5173/api/auth/steam/login**, complete sign-in, and privately
+   confirm `/api/auth/me` matches your account. Use localhost consistently. Check
+   `gamerec_session` is HttpOnly in DevTools; do not copy/export the cookie.
+2. From **http://localhost:5173/discover**, run this in DevTools Console. It performs
+   one real own-library sync, a temporary like then dislike, restores the original
+   unrated state, checks persisted recommendations and authorization, then logs out.
+   Keep the tab open and avoid concurrent preference edits during this check.
+
+```javascript
+const { verifyAuthenticatedAccount } = await import('/scripts/verify_authenticated_account.ts');
+const accountCheck = await verifyAuthenticatedAccount({ sync: true });
+console.log(accountCheck);
+```
+
+The helper is outside the production application entry point and adds no route or
+login UI. It uses your browser session and derives the ID from `/auth/me`; neither
+identity nor cookie is returned in its report. If the first 100 stored games contain
+no unrated game, preference checks are explicitly skipped. The chosen game may be
+unindexed or too weak to change final scores/order; unchanged results are valid
+observations. Top-20 exports and per-game hybrid/affinity comparisons are actual
+returned values, not inferred rankings.
+
+Expected report: own reads succeed; sync timestamp is persisted; preference check
+and restoration succeed; restored scores/order match; cross-account checks return
+403; logout returns 204; logged-out protected requests return 401. A changed ranking
+is not required, and no improved-relevance claim is implied.
+
+If `recovery_app_id` is non-null, cleanup could not be confirmed: keep the signed-in
+session, clear that game's temporary rating in your own Library and verify its saved
+state before continuing. A lost sync response can still mean a committed import;
+refresh stored data before retrying, and do not blindly rerun `sync: true`. Use
+`{ sync: false }` for a later check that must not contact Steam. Redact identifiers
+before retaining evidence; do not share cookies, callback URLs or auth network traces.
+
+### Phase 2C compatibility work
+
+The frontend changes listed at the Phase 2B checkpoint are implemented below.
+Backend ownership checks, cookie policy, strict Origin/Referer CSRF checks and
+all API schemas remain unchanged. No additional backend edits were needed.
+
+## Steam login and account experience — Phase 2C
+
+Use **Sign in with Steam** in the existing sidebar/mobile header. It performs a
+normal top-level navigation through the configured API base (`/api` by default)
+to `/auth/steam/login`. Steam credentials are entered only on Steam; FastAPI
+verifies the callback and establishes its HttpOnly session. No frontend code
+parses OpenID assertions or reads session cookies.
+
+The compact signed-in control reads **Signed in with Steam** with **Sign out**.
+No full Steam ID, invented profile name or avatar is displayed. Discovery,
+search and on-demand explanations remain public.
+
+### Current-user query and protected pages
+
+`getCurrentUser(signal)` returns `{ steamid64: string }` or null for the expected
+401. `useCurrentUser()` is the single identity source, keyed by `['current-user']`.
+Loading and server/network errors are distinct from signed out. Authentication
+has no automatic retries and is rechecked on initial load, protected-page entry,
+window focus and reconnect. There is no polling. Authentication outages show an
+explicit retry while public discovery remains usable.
+
+Library and Recommendations derive their ID exclusively from that query. Both
+sidebar links load the signed-in account automatically; manual Library ID inputs,
+development selectors and router-state identity handoffs are removed. Normal
+Library URLs use `/library?page=N`; only matching-owner legacy links redirect to
+that canonical route. A different/invalid legacy ID displays an unavailable state
+without requesting it. Protected pages hide private content while authentication
+is checking, uncertain or signing out.
+
+An empty stored Library offers **Sync Library** when permitted. Sign-in never
+starts an import. Sync/Like/Dislike/Clear now respect owner capability flags in
+production as well as development. Existing cooldowns, pending protections,
+background-refresh snapshots, error recovery and ranking order remain intact.
+
+All API fetches explicitly use `credentials: 'include'`. Browsers supply the
+trusted Origin/Referer for writes; no new CSRF cookie, token, header or exemption
+is introduced. 401 ends the private presentation; 403 distinguishes ownership
+from `csrf_failed`. A configured ID never authenticates a caller.
+
+### Login return, logout and cache privacy
+
+Sign-in remembers only one of `/discover`, `/library` or `/recommendations`, with
+a ten-minute expiry, in `sessionStorage['gamerec.auth.returnTo']`. It stores no ID,
+query parameters or session material. After the backend returns to Discover and
+a fresh `/auth/me` succeeds, this allowlisted destination is consumed once and
+restored with history replacement. Invalid/expired entries are discarded. If
+storage is unavailable, login still returns to Discover. The backend redirect
+configuration and OpenID protections are unchanged.
+
+Sign out calls the backend first. Pending logout blocks private interaction.
+Success clears private query and mutation data, resets identity and returns to
+Discover. Failure says sign-out could not be confirmed and rechecks the server;
+a lost response can still follow a completed logout. No frontend-only logout is
+presented as successful server revocation.
+
+A per-QueryClient generation counter fences asynchronous work; it is not another
+identity store. Logout attempts, confirmed identity changes and current-generation
+401s advance it. Obsolete reads are cancelled, and private caches/mutation entries
+are removed on successful logout, account changes and expiry. Late callbacks
+cannot restore old data or expire a newer session, including A→B→A transitions.
+Public discovery/explanation caches are retained. Already accepted server writes
+may still complete after logout; logging in again reads current stored data.
+Expiry/revocation is detected on revalidation or a protected response, not by a
+background push notification.
+
+### Verification and screenshots
+
+On **13 November 2026**, **133 mocked browser tests**, **two production-preview
+checks**, **391 backend auth/API regressions**, TypeScript, ESLint, production
+build, repository Ruff and diff checks passed. No additional backend change or
+migration was required. Tests cover native redirect navigation, credentials and
+HttpOnly-cookie transport, Origin, safe return destinations, automatic sidebar
+identity, first-time empty state, pagination, feedback, sync, logout uncertainty,
+401/403 handling, account switching and delayed requests/mutations.
+
+The real public browser regression passed with the existing model service running:
+20 search results and two explicit explanations through Vite, with no automatic
+explanation request. Ollama was initially stopped (the expected 503), temporarily
+started without model downloads, and restored to its prior stopped state afterward.
+The temporary production preview was also stopped. Explanations still require
+Ollama to be running; ordinary search and personal pages do not.
+
+The real proxy authentication-readiness check also passed without entering Steam
+credentials: expected 401/403/204, Steam 303, protected temporary cookie attributes
+and trusted/untrusted CORS decisions. Signed-in end-to-end UI verification remains
+pending the assisted browser pass; mocked evidence is not a real Steam login.
+
+Desktop/mobile signed-in and signed-out screenshots were captured and visually
+reviewed under ignored `frontend/live-results/auth/phase2c/`. Keyboard focus,
+reduced motion and no horizontal overflow were checked at 320, 390, 768 and 1440 px.
+Screenshots use synthetic games/accounts and display no account identifier.
+
+Run normal frontend commands inside the existing frontend container:
+
+```bash
+docker compose exec -T frontend npm run typecheck
+docker compose exec -T frontend npm run lint
+docker compose exec -T frontend npm run build
+# Use the existing matched Playwright container command from Frontend checks:
+# npm test                     -- mocked suite
+# npm run test:production      -- built preview on frontend:5174, mocked API
+# npm run test:auth:live       -- real proxy, no Steam credential entry
+```
+
+The preview check needs `docker compose exec -d frontend npm run preview -- --port 5174`
+while it runs; it is temporary local verification, not deployment infrastructure.
+Keep live traces/video/automatic screenshots disabled and retain redacted evidence.
+
+### Assisted Steam browser pass
+
+The running development frontend hot-reloads these changes; a rebuild is not
+needed to see the sign-in control. Use localhost:5173 consistently. Do not export
+cookies, raw auth traces or full callback URLs.
+
+1. Use **Sign out** if already signed in. Confirm protected pages show Sign in to
+   continue, and public Discover/search still work.
+2. From Library click **Sign in with Steam**, complete Steam login, and confirm
+   you return to Library with your own data and no ID entry. Privately verify the
+   `/auth/me` identity if needed. Check the session cookie is HttpOnly in DevTools.
+3. Click **Sync Library** once, wait for completion and confirm the stored timestamp.
+   If the response is lost, refresh stored data before retrying; respect cooldown.
+   OpenID login does not grant visibility into private Steam game details.
+4. Choose an originally unrated owned game, click Like, open Recommendations using
+   the sidebar, then return to Library and verify the rating persisted. Click the
+   selected Like to clear it and verify Unrated. Restore before signing out.
+5. Sign out, visit both protected pages, and refresh. Private games should be gone;
+   public discovery remains usable. For a separate revocation check, sign out in a
+   second tab, return to the original tab and confirm revalidation hides private data.
+
+Report only completed steps and safe statuses. Existing recommendation relevance
+and explanation-quality ratings remain pending. No algorithms, ingestion policy,
+new profile APIs or dependencies were added. CI stays intentionally removed.
 
 ## Natural-language game search
 

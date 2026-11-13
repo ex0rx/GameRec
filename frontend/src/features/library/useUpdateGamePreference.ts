@@ -2,11 +2,13 @@ import { useMutation, useMutationState, useQueryClient } from '@tanstack/react-q
 import { updateGamePreference } from '../../api/client'
 import type { GamePreference, LibraryResponse } from '../../api/types'
 import { validLibrarySteamId } from './libraryState'
+import { isCurrentSession, privateRequest, readSessionGeneration } from '../auth/sessionCache'
 
 interface PreferenceChange {
   steamId: string
   appId: number
   preference: GamePreference | null
+  generation: number
 }
 
 export function preferenceMutationKey(steamId: string, appId: number) {
@@ -16,13 +18,17 @@ export function preferenceMutationKey(steamId: string, appId: number) {
 export function useUpdateGamePreference(steamId: string, appId: number) {
   const id = steamId.trim()
   const client = useQueryClient()
+  const generation = readSessionGeneration(client)
   const mutationKey = preferenceMutationKey(id, appId)
   const mutation = useMutation({
     mutationKey,
     mutationFn: (change: PreferenceChange) =>
-      updateGamePreference(change.steamId, change.appId, change.preference),
+      privateRequest(client, change.steamId, change.generation,
+        () => updateGamePreference(change.steamId, change.appId, change.preference)),
+    onMutate: (change) => ({ generation: change.generation }),
     retry: false,
-    onSuccess: async (result, original) => {
+    onSuccess: async (result, original, context) => {
+      if (!isCurrentSession(client, original.steamId, context.generation)) return
       const libraryKey = ['steam-library', original.steamId]
       const recommendationKey = ['recommendations', original.steamId]
       // An earlier GET/recommendation response must not replace the confirmed write.
@@ -30,6 +36,7 @@ export function useUpdateGamePreference(steamId: string, appId: number) {
         client.cancelQueries({ queryKey: libraryKey }),
         client.cancelQueries({ queryKey: recommendationKey }),
       ])
+      if (!isCurrentSession(client, original.steamId, context.generation)) return
       const preference = result ? result.preference : null
       client.setQueriesData<LibraryResponse>({ queryKey: libraryKey }, (previous) =>
         previous
@@ -64,10 +71,11 @@ export function useUpdateGamePreference(steamId: string, appId: number) {
   const isPending = states.some((entry) => entry.status === 'pending')
 
   function save(preference: GamePreference | null) {
+    if (!isCurrentSession(client, id, generation)) return
     if (!validLibrarySteamId(id) || !Number.isInteger(appId) || appId <= 0) return
     if (client.getMutationCache().findAll({ mutationKey, exact: true, status: 'pending' }).length)
       return
-    mutation.mutate({ steamId: id, appId, preference })
+    mutation.mutate({ steamId: id, appId, preference, generation })
   }
 
   return {

@@ -54,7 +54,9 @@ test('live search, artwork and explicit explanation through the frontend proxy',
     path: testInfo.outputPath('mobile-explanation.png'),
     animations: 'disabled',
   })
-  expect(apiCalls.every((response) => response.status === 200)).toBe(true)
+  expect(apiCalls.some((response) => response.path === '/api/auth/me' && response.status === 401)).toBe(true)
+  expect(apiCalls.filter((response) => response.path !== '/api/auth/me')
+    .every((response) => response.status === 200)).toBe(true)
   const evidencePath = testInfo.outputPath('live-api-evidence.json')
   await writeFile(
     evidencePath,

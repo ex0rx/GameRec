@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
-import type { Page } from '@playwright/test'
 import { USER_A, game } from './recommendation-fixtures'
+import { mockCurrentUser } from './auth-fixtures'
 
 const games = [
   {
@@ -10,57 +10,34 @@ const games = [
   { ...game, steam_app_id: 30, name: null },
   { ...game, steam_app_id: 40, name: '   ' },
 ]
-async function select(page: Page, id = USER_A) {
-  await page.getByLabel('Development Steam ID').fill(id)
-  await page.getByRole('button', { name: 'Load recommendations' }).click()
-}
-async function showProfile(page: Page) {
-  if (!(await page.getByLabel('Development Steam ID').isVisible())) {
-    await page.locator('.development-profile summary').click()
-  }
-}
-
 test.beforeEach(async ({ page }) => {
+  await mockCurrentUser(page, USER_A)
   await page.route('**/api/recommendations', (route) =>
     route.fulfill({ json: { total: games.length, limit: 20, games } }),
   )
   await page.route('https://shared.fastly.steamstatic.com/**', (route) => route.abort())
 })
 
-test('navigation and missing identity do not fetch; Library is accessible', async ({ page }) => {
+test('signed-out Recommendations require sign-in without private requests', async ({ page }) => {
+  await mockCurrentUser(page, null)
   const calls: string[] = []
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(request.url())
+    if (new URL(request.url()).pathname === '/api/recommendations') calls.push(request.url())
   })
   await page.goto('/discover')
   await page.getByRole('link', { name: 'Recommendations', exact: true }).click()
   await expect(page).toHaveURL('/recommendations')
-  await expect(page.getByRole('link', { name: 'Recommendations', exact: true })).toHaveAttribute(
-    'aria-current',
-    'page',
-  )
-  await expect(page.getByRole('link', { name: 'Discover', exact: true })).not.toHaveAttribute(
-    'aria-current',
-  )
-  await expect(page.getByRole('heading', { name: 'No profile selected' })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Library', exact: true })).toHaveAttribute(
-    'href',
-    '/library',
-  )
+  await expect(page.getByRole('link', { name: 'Recommendations', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(page.getByRole('link', { name: 'Sign in with Steam' }).last()).toBeVisible()
+  await expect(page.getByRole('article')).toHaveCount(0)
   expect(calls).toEqual([])
 })
 
-test('invalid identifiers are rejected without contacting the API', async ({ page }) => {
-  let calls = 0
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls++
-  })
+test('manual identity controls are absent in the signed-in recommendation journey', async ({ page }) => {
   await page.goto('/recommendations')
-  for (const value of ['', '   ', 'abc', '-1', '0', '001', '18446744073709551616']) {
-    await select(page, value)
-    await expect(page.getByRole('alert')).toContainText('positive unsigned 64-bit Steam ID')
-  }
-  expect(calls).toBe(0)
+  await expect(page.getByRole('article')).toHaveCount(3)
+  await expect(page.getByLabel('Development Steam ID')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Load recommendations' })).toHaveCount(0)
 })
 
 test('valid string ID renders server order and sparse metadata, without persistence or explanations', async ({
@@ -69,11 +46,10 @@ test('valid string ID renders server order and sparse metadata, without persiste
   const apiPaths: string[] = []
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
-    if (path.startsWith('/api/')) apiPaths.push(path)
+    if (path.startsWith('/api/') && !path.startsWith('/api/auth/')) apiPaths.push(path)
   })
-  await page.goto('/recommendations')
   const request = page.waitForRequest('**/api/recommendations')
-  await select(page, `  ${USER_A}  `)
+  await page.goto('/recommendations')
   expect((await request).postDataJSON()).toEqual({ steamid64: USER_A, limit: 20 })
   await expect(page.getByRole('article')).toHaveCount(3)
   await expect(page.locator('.game-title-row h3')).toHaveText([
@@ -83,8 +59,7 @@ test('valid string ID renders server order and sparse metadata, without persiste
   ])
   await expect(page.locator('.result-position')).toHaveText(['01', '02', '03'])
   await expect(page.getByText('3 games returned')).toBeVisible()
-  await showProfile(page)
-  await expect(page.getByLabel('Development Steam ID')).toHaveValue('')
+  await expect(page.getByLabel('Development Steam ID')).toHaveCount(0)
   expect(new URL(page.url()).search).toBe('')
   expect(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).toEqual({})
   await expect(page.getByRole('button', { name: 'Why this game?' })).toHaveCount(0)
@@ -109,7 +84,7 @@ test('valid string ID renders server order and sparse metadata, without persiste
   await expect(page.getByText(/0\.7|70%|Review quality|Similarity score/)).toHaveCount(0)
 })
 
-test('loading disables refresh; same profile reuses fresh cache; clearing removes results', async ({
+test('loading disables refresh and explicit refresh failures hide stale results', async ({
   page,
 }) => {
   let release!: () => void
@@ -125,24 +100,15 @@ test('loading disables refresh; same profile reuses fresh cache; clearing remove
     else await route.fulfill({ json: { total: 1, limit: 20, games: [game] } })
   })
   await page.goto('/recommendations')
-  await select(page)
   await expect(page.getByLabel('Loading recommendations')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Refresh' })).toBeDisabled()
   release()
-  await expect(page.getByRole('article')).toHaveCount(1)
-  await showProfile(page)
-  await select(page)
   await expect(page.getByRole('article')).toHaveCount(1)
   expect(calls).toBe(1)
   failRefresh = true
   await page.getByRole('button', { name: 'Refresh' }).click()
   await expect(page.getByRole('alert')).toContainText('temporarily unavailable')
   await expect(page.getByText('1 game returned')).toHaveCount(0)
-  expect(calls).toBe(2)
-  await showProfile(page)
-  await page.getByRole('button', { name: 'Clear profile' }).click()
-  await expect(page.getByRole('heading', { name: 'No profile selected' })).toBeVisible()
-  await expect(page.getByRole('article')).toHaveCount(0)
   expect(calls).toBe(2)
 })
 
@@ -151,7 +117,6 @@ test('empty recommendations do not imply an empty library', async ({ page }) => 
     route.fulfill({ json: { total: 0, limit: 20, games: [] } }),
   )
   await page.goto('/recommendations')
-  await select(page)
   await expect(
     page.getByRole('heading', { name: 'No recommendations available yet' }),
   ).toBeVisible()
@@ -168,12 +133,11 @@ for (const status of [404, 422, 503, 0]) {
         : route.abort()
     })
     await page.goto('/recommendations')
-    await select(page)
     const message =
       status === 404
         ? 'No stored user'
         : status === 422
-          ? 'Check the Steam ID'
+          ? 'Check'
           : status === 0
             ? 'Could not connect'
             : 'temporarily unavailable'
@@ -192,8 +156,7 @@ for (const width of [320, 390, 768, 1440]) {
     await page.setViewportSize({ width, height: 1000 })
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.goto('/recommendations')
-    await select(page)
-    await expect(page.getByRole('article')).toHaveCount(3)
+      await expect(page.getByRole('article')).toHaveCount(3)
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
     ).toBe(true)
@@ -212,6 +175,6 @@ for (const width of [320, 390, 768, 1440]) {
     await page.keyboard.press('Escape')
     await page.getByRole('link', { name: 'Discover', exact: true }).click()
     await page.getByRole('link', { name: 'Recommendations', exact: true }).click()
-    await expect(page.getByRole('heading', { name: 'No profile selected' })).toBeVisible()
+    await expect(page.getByRole('article')).toHaveCount(3)
   })
 }

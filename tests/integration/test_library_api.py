@@ -8,11 +8,13 @@ from gamerec.models import User
 from gamerec.services.steam_library import save_steam_library
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
-USER_A = "synthetic-reader-a"
-USER_B = "synthetic-reader-b"
+USER_A = "76561190000000001"
+USER_B = "76561190000000002"
 
 
-async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_client):
+async def test_library_pages_are_stably_ordered_and_scoped(
+    pg_sessions, pg_client, authenticate_pg_client
+):
     # Reverse insertion order proves the explicit ORDER BY, not insertion order.
     games = [
         {
@@ -36,6 +38,7 @@ async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_clien
         user.library_last_synced_at = timestamp
         await db.commit()
 
+    await authenticate_pg_client(USER_A)
     for limit, offset in [(50, 0), (50, 50), (100, 0), (1, 64), (50, 65), (50, 100)]:
         response = await pg_client.get(
             f"/users/{USER_A}/library", params={"limit": limit, "offset": offset}
@@ -55,6 +58,7 @@ async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_clien
             )
         ).json() == body
 
+    await authenticate_pg_client(USER_B)
     response = await pg_client.get(f"/users/{USER_B}/library")
     assert response.status_code == 200
     assert response.json()["total_games"] == 1
@@ -69,18 +73,21 @@ async def test_library_pages_are_stably_ordered_and_scoped(pg_sessions, pg_clien
     ]
 
 
-async def test_unknown_and_existing_empty_user_are_distinct(pg_sessions, pg_client):
+async def test_anonymous_and_existing_empty_user_are_distinct(
+    pg_sessions, pg_client, authenticate_pg_client
+):
     response = await pg_client.get(f"/users/{USER_A}/library")
-    assert response.status_code == 404
+    assert response.status_code == 401
     async with pg_sessions() as db:
         db.add(User(steamid64=USER_A))
         await db.commit()
+    await authenticate_pg_client(USER_A)
     response = await pg_client.get(f"/users/{USER_A}/library")
     assert response.status_code == 200
     assert response.json() == {
         "steamid64": USER_A,
-        "sync_allowed": False,
-        "preference_writes_allowed": False,
+        "sync_allowed": True,
+        "preference_writes_allowed": True,
         "games": [],
         "total_games": 0,
         "limit": 50,

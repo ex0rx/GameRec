@@ -1,4 +1,4 @@
-"""Auth-only response privacy and redaction of assertion/identity URLs."""
+"""Account response privacy and redaction of assertion/identity URLs."""
 
 import logging
 import re
@@ -35,6 +35,12 @@ class AuthLogFilter(logging.Filter):
         return True
 
 
+def private_account_path(path: str) -> bool:
+    return (
+        path.startswith(("/auth/", "/users/")) or path.rstrip("/") == "/recommendations"
+    )
+
+
 def install_auth_log_filters() -> None:
     for name in (
         "uvicorn.access",
@@ -54,7 +60,8 @@ class AuthPrivacyMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not scope.get("path", "").startswith("/auth/"):
+        path = scope.get("path", "")
+        if scope["type"] != "http" or not private_account_path(path):
             await self.app(scope, receive, send)
             return
 

@@ -3,6 +3,7 @@ import type { Page } from '@playwright/test'
 import type { GamePreference } from '../src/api/types'
 import { libraryGames, libraryResponse } from './library-fixtures'
 import { game as recommendation, USER_A, USER_B } from './recommendation-fixtures'
+import { changeCurrentUser, mockCurrentUser } from './auth-fixtures'
 
 const libraryRoute = '**/api/users/*/library?**'
 const preferenceRoute = '**/api/users/*/preferences/*'
@@ -12,8 +13,8 @@ const dislike = (page: Page, appId = 40) =>
   row(page, appId).getByRole('button', { name: /^Dislike / })
 
 async function selectLibrary(page: Page, id: string) {
-  await page.getByLabel('Steam ID64', { exact: true }).fill(id)
-  await page.getByRole('button', { name: 'Load library', exact: true }).click()
+  const session = await mockCurrentUser(page, id)
+  await changeCurrentUser(page, session, id)
 }
 
 function preferenceResponse(id: string, appId: number, preference: GamePreference) {
@@ -53,6 +54,7 @@ async function savedLibrary(page: Page, initial: GamePreference | null = null) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await mockCurrentUser(page, USER_A)
   await page.route('https://shared.fastly.steamstatic.com/**', (route) => route.abort())
 })
 
@@ -71,7 +73,7 @@ test('read-only states are visible without controls or automatic writes', async 
       ),
     }),
   )
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(row(page)).toContainText('Liked')
   await expect(row(page, 20)).toContainText('Disliked')
   await expect(row(page, 30)).toContainText('Unrated')
@@ -81,7 +83,7 @@ test('read-only states are visible without controls or automatic writes', async 
 
 test('like, switch, clear and reload preserve exact IDs and saved states', async ({ page }) => {
   const writes = await savedLibrary(page)
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(like(page)).toHaveAttribute('aria-pressed', 'false')
   await like(page).focus()
   await page.keyboard.press('Enter')
@@ -111,7 +113,7 @@ test('like, switch, clear and reload preserve exact IDs and saved states', async
 
 test('legacy neutral is preserved until explicitly cleared', async ({ page }) => {
   const writes = await savedLibrary(page, 'neutral')
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(row(page)).toContainText('Neutral (legacy)')
   await expect(like(page)).toHaveAttribute('aria-pressed', 'false')
   await expect(dislike(page)).toHaveAttribute('aria-pressed', 'false')
@@ -137,7 +139,7 @@ test('pending writes retain confirmed state and block duplicates after leaving a
     await pending
     await route.fulfill({ json: preferenceResponse(USER_A, 40, 'disliked') })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await dislike(page).click()
   await expect(row(page).getByText('Saving…')).toBeVisible()
   await expect(like(page)).toHaveAttribute('aria-pressed', 'true')
@@ -168,7 +170,7 @@ test('pending writes retain confirmed state and block duplicates after leaving a
 })
 
 for (const [status, code, message] of [
-  [403, 'preference_forbidden', /not permitted/],
+  [403, 'account_forbidden', /signed-in owner/],
   [404, 'game_not_owned', /no longer available/],
   [422, '', /could not be saved/],
   [503, 'database_unavailable', /temporarily unavailable/],
@@ -186,7 +188,7 @@ for (const [status, code, message] of [
         ? route.fulfill({ status, json: { detail: { code, message: 'Synthetic safe error' } } })
         : route.abort()
     })
-    await page.goto(`/library/${USER_A}`)
+    await page.goto('/library')
     await dislike(page).click()
     await expect(row(page).getByRole('alert')).toContainText(message)
     await expect(like(page)).toHaveAttribute('aria-pressed', 'true')
@@ -233,7 +235,7 @@ test('switching libraries isolates pending and completed feedback', async ({ pag
     preference = 'liked'
     await route.fulfill({ json: preferenceResponse(USER_A, 40, 'liked') })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await like(page).click()
   await selectLibrary(page, USER_B)
   await expect(like(page)).toBeEnabled()
@@ -257,7 +259,7 @@ test('confirmed state remains visible if background library refresh fails', asyn
   await page.route(preferenceRoute, (route) =>
     route.fulfill({ json: preferenceResponse(USER_A, 40, 'liked') }),
   )
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await like(page).click()
   await expect(like(page)).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByText(/displayed snapshot could not be refreshed/)).toBeVisible()
@@ -271,7 +273,7 @@ test('recommendation handoff fetches fresh server ordering without unrelated req
   let recommendationRequests = 0
   const unexpected: string[] = []
   page.on('request', (request) => {
-    if (/\/library\/sync|\/explanations|\/auth/.test(request.url())) unexpected.push(request.url())
+    if (/\/library\/sync|\/explanations/.test(request.url())) unexpected.push(request.url())
   })
   await page.route('**/api/recommendations', (route) => {
     recommendationRequests++
@@ -291,7 +293,7 @@ test('recommendation handoff fetches fresh server ordering without unrelated req
       },
     })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await page.getByRole('link', { name: 'View recommendations' }).click()
   await expect(page.getByRole('button', { name: 'Inspect First 0' })).toBeVisible()
   await page.getByRole('link', { name: 'Library', exact: true }).click()
@@ -328,7 +330,7 @@ test('controls retain keyboard focus and fit restrained layouts with all prefere
     }),
   )
   await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await like(page).focus()
   await expect(like(page)).toBeFocused()
   for (const [name, width, height] of [

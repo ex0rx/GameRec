@@ -11,6 +11,7 @@ import { libraryResponse } from './library-fixtures'
 import { game, USER_A, USER_B } from './recommendation-fixtures'
 
 const client = createQueryClient()
+client.setQueryData(['current-user'], { steamid64: USER_A })
 const keys = [
   ['steam-library', USER_A, { limit: 50, offset: 0 }],
   ['steam-library', USER_A, { limit: 50, offset: 50 }],

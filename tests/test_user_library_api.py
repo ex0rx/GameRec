@@ -16,8 +16,8 @@ from gamerec.db import get_db
 from gamerec.main import app
 
 pytestmark = pytest.mark.asyncio
-USER_A = "synthetic-user-a"
-USER_B = "synthetic-user-b"
+USER_A = "76561190000000001"
+USER_B = "76561190000000002"
 
 
 def game(appid):
@@ -34,8 +34,8 @@ def library(user=USER_A, games=None, *, timestamp=None, limit=50, offset=0):
     games = [] if games is None else games
     return {
         "steamid64": user,
-        "sync_allowed": False,
-        "preference_writes_allowed": False,
+        "sync_allowed": True,
+        "preference_writes_allowed": True,
         "library_last_synced_at": timestamp,
         "total_games": len(games),
         "limit": limit,
@@ -52,16 +52,20 @@ def library_service(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch, fake_db, library_service):
+async def client(monkeypatch, fake_db, library_service, authenticated_user):
     async def override_db():
         yield fake_db
 
     # monkeypatch restores any previous override after the test.
     monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        cookies={"gamerec_session": "s" * 43},
+    ) as client:
         yield client
-    assert fake_db.mock_calls == []
+    fake_db.execute.assert_not_called()
 
 
 async def test_pagination_returns_remaining_games_without_page_overlap(
@@ -94,13 +98,13 @@ async def test_pagination_returns_remaining_games_without_page_overlap(
 
 async def test_unknown_user_returns_404(client, library_service, fake_db):
     library_service.return_value = None
-    response = await client.get("/users/synthetic-unknown/library")
+    response = await client.get(f"/users/{USER_A}/library")
     assert response.status_code == 404
     assert response.json() == {
-        "detail": "User with steamid64 synthetic-unknown not found",
+        "detail": {"code": "user_not_found", "message": "Stored user not found."},
     }
     library_service.assert_awaited_once_with(
-        db=fake_db, steamid64="synthetic-unknown", limit=50, offset=0
+        db=fake_db, steamid64=USER_A, limit=50, offset=0
     )
 
 
@@ -127,7 +131,7 @@ async def test_invalid_pagination_returns_422_without_calling_service(
 
 
 async def test_user_id_is_forwarded_and_libraries_remain_separate(
-    client, library_service, fake_db
+    client, library_service, fake_db, authenticated_user
 ):
     libraries = {USER_A: [game(10)], USER_B: [game(20), game(30)]}
 
@@ -136,6 +140,7 @@ async def test_user_id_is_forwarded_and_libraries_remain_separate(
 
     library_service.side_effect = user_response
     for user in (USER_A, USER_B, USER_A):
+        authenticated_user.steamid64 = user
         response = await client.get(f"/users/{user}/library")
         assert response.status_code == 200
         assert response.json() == library(user, libraries[user])
@@ -181,3 +186,5 @@ async def test_invalid_service_payload_is_rejected_by_response_validation(
     response = await client.get(f"/users/{USER_A}/library")
     assert response.status_code == 500
     assert response.text == "Internal Server Error"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"

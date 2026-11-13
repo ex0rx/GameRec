@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gamerec.core.development_access import preference_writes_allowed
+from gamerec.api.auth import get_current_user
+from gamerec.core.auth_security import require_account_owner, require_trusted_origin
 from gamerec.db import get_db
+from gamerec.models.user import User
 from gamerec.schemas.user_game_preference import (
     UserGamePreferenceRequest,
     UserGamePreferenceResponse,
@@ -16,7 +18,6 @@ from gamerec.schemas.user_library import LibrarySyncResponse, UserLibraryRespons
 from gamerec.services.manual_library_sync import (
     LibrarySyncCoordinator,
     LibrarySyncError,
-    sync_allowed,
     sync_library,
 )
 from gamerec.services.user_game_preferences import (
@@ -37,17 +38,6 @@ router = APIRouter(
 
 async def get_sync_coordinator(request: Request) -> LibrarySyncCoordinator:
     return request.app.state.library_sync_coordinator
-
-
-def require_preference_write_access(steamid64: str) -> None:
-    if not preference_writes_allowed(steamid64):
-        raise HTTPException(
-            403,
-            detail={
-                "code": "preference_forbidden",
-                "message": "Preference editing is not allowed.",
-            },
-        )
 
 
 def preference_not_found_error(exc: Exception) -> HTTPException:
@@ -73,14 +63,31 @@ def preference_storage_error(exc: Exception) -> HTTPException:
     )
 
 
+def account_storage_error(exc: Exception) -> HTTPException:
+    logging.getLogger(__name__).warning(
+        "Account storage failed (%s)", type(exc).__name__
+    )
+    return HTTPException(
+        503,
+        detail={
+            "code": "database_unavailable",
+            "message": "Account storage is temporarily unavailable.",
+        },
+    )
+
+
 @router.post("/{steamid64}/library/sync", response_model=LibrarySyncResponse)
 async def sync_user_library_endpoint(
+    request: Request,
     steamid64: Annotated[str, Path(pattern=r"^[0-9]{17}$")],
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     coordinator: Annotated[LibrarySyncCoordinator, Depends(get_sync_coordinator)],
 ) -> LibrarySyncResponse:
+    require_account_owner(current_user.steamid64, steamid64)
+    require_trusted_origin(request)
     try:
-        return await sync_library(db, steamid64, coordinator)
+        return await sync_library(db, current_user.steamid64, coordinator)
     except LibrarySyncError as exc:
         raise HTTPException(
             status_code=exc.status,
@@ -123,27 +130,30 @@ async def sync_user_library_endpoint(
 )
 async def get_user_library_endpoint(
     db: Annotated[AsyncSession, Depends(get_db)],
-    steamid64: str,
+    steamid64: Annotated[str, Path(pattern=r"^[0-9]{17}$")],
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: Annotated[int, Query(gt=0, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> UserLibraryResponse:
-    user_game_library = await get_user_library(
-        db=db,
-        steamid64=steamid64,
-        limit=limit,
-        offset=offset,
-    )
+    require_account_owner(current_user.steamid64, steamid64)
+    try:
+        user_game_library = await get_user_library(
+            db=db,
+            steamid64=current_user.steamid64,
+            limit=limit,
+            offset=offset,
+        )
+    except (SQLAlchemyError, OSError) as exc:
+        raise account_storage_error(exc) from None
 
     if user_game_library is None:
         raise HTTPException(
             status_code=404,
-            detail=f"User with steamid64 {steamid64} not found",
+            detail={"code": "user_not_found", "message": "Stored user not found."},
         )
 
-    user_game_library["sync_allowed"] = sync_allowed(steamid64)
-    user_game_library["preference_writes_allowed"] = preference_writes_allowed(
-        steamid64
-    )
+    user_game_library["sync_allowed"] = True
+    user_game_library["preference_writes_allowed"] = True
     return user_game_library
 
 
@@ -153,17 +163,20 @@ async def get_user_library_endpoint(
     response_model=UserGamePreferenceResponse,
 )
 async def update_user_game_preference(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     steamid64: Annotated[str, Path(pattern=r"^[0-9]{17}$")],
     steam_app_id: Annotated[int, Path(gt=0, le=2**31 - 1)],
     preference_request: UserGamePreferenceRequest,
 ) -> UserGamePreferenceResponse:
-    require_preference_write_access(steamid64)
+    require_account_owner(current_user.steamid64, steamid64)
+    require_trusted_origin(request)
     try:
         async with db.begin():
             saved_preference = await upsert_user_game_preference(
                 db=db,
-                steamid64=steamid64,
+                steamid64=current_user.steamid64,
                 steam_app_id=steam_app_id,
                 preference=preference_request.preference.value,
             )
@@ -185,24 +198,25 @@ async def update_user_game_preference(
 )
 async def list_user_game_preferences(
     db: Annotated[AsyncSession, Depends(get_db)],
-    steamid64: str,
+    steamid64: Annotated[str, Path(pattern=r"^[0-9]{17}$")],
+    current_user: Annotated[User, Depends(get_current_user)],
     limit: Annotated[int, Query(gt=0, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[UserGamePreferenceResponse]:
+    require_account_owner(current_user.steamid64, steamid64)
     try:
         async with db.begin():
             user_game_preferences = await get_user_game_preference(
                 db=db,
-                steamid64=steamid64,
+                steamid64=current_user.steamid64,
                 limit=limit,
                 offset=offset,
             )
 
-    except UserNotFoundError:
-        raise HTTPException(
-            status_code=404,
-            detail=f"User with steamid64 {steamid64} not found",
-        )
+    except UserNotFoundError as exc:
+        raise preference_not_found_error(exc) from None
+    except (SQLAlchemyError, OSError) as exc:
+        raise account_storage_error(exc) from None
 
     return user_game_preferences
 
@@ -213,16 +227,19 @@ async def list_user_game_preferences(
     summary="Delete a game preference from a user",
 )
 async def remove_user_game_preference(
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
     steamid64: Annotated[str, Path(pattern=r"^[0-9]{17}$")],
     steam_app_id: Annotated[int, Path(gt=0, le=2**31 - 1)],
 ) -> None:
-    require_preference_write_access(steamid64)
+    require_account_owner(current_user.steamid64, steamid64)
+    require_trusted_origin(request)
     try:
         async with db.begin():
             await delete_user_game_preference(
                 db=db,
-                steamid64=steamid64,
+                steamid64=current_user.steamid64,
                 steam_app_id=steam_app_id,
             )
 

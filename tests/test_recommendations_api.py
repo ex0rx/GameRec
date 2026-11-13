@@ -28,7 +28,7 @@ def service(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch, fake_db, service):
+async def client(monkeypatch, fake_db, service, authenticated_user):
     async def override_db():
         yield fake_db
 
@@ -36,6 +36,7 @@ async def client(monkeypatch, fake_db, service):
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
         base_url="http://test",
+        cookies={"gamerec_session": "s" * 43},
     ) as client:
         yield client
 
@@ -98,10 +99,12 @@ async def test_invalid_body_returns_422_without_recommending(client, service, pa
 
 
 @pytest.mark.parametrize("steamid64", ["1", str(2**64 - 1)])
-async def test_unsigned_id_boundaries_remain_strings(client, service, steamid64):
+async def test_valid_unsigned_boundaries_cannot_select_another_account(
+    client, service, steamid64
+):
     response = await client.post("/recommendations", json={"steamid64": steamid64})
-    assert response.status_code == 200
-    assert service.await_args.args[1] == steamid64
+    assert response.status_code == 403
+    service.assert_not_called()
 
 
 async def test_unknown_user_has_safe_404(client, service):
@@ -135,9 +138,11 @@ async def test_programming_errors_are_not_hidden_as_dependency_failures(
     client, service
 ):
     service.side_effect = TypeError("synthetic programming failure")
-    assert (
-        await client.post("/recommendations", json={"steamid64": USER})
-    ).status_code == 500
+    response = await client.post("/recommendations", json={"steamid64": USER})
+    assert response.status_code == 500
+    assert response.text == "Internal Server Error"
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["referrer-policy"] == "no-referrer"
 
 
 async def test_post_body_is_required_not_a_user_id_url(client, service):

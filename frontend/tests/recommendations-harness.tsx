@@ -3,8 +3,19 @@ import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createQueryClient } from '../src/app/queryClient'
+import { advanceSession, currentUserKey } from '../src/features/auth/sessionCache'
+import type { CurrentUser } from '../src/api/types'
 import { useRecommendations } from '../src/features/recommendations/useRecommendations'
 import { errorMessage } from '../src/api/client'
+
+const client = createQueryClient()
+
+function setTestIdentity(steamId: string) {
+  const id = steamId.trim()
+  if (client.getQueryData<CurrentUser | null>(currentUserKey)?.steamid64 !== (id || undefined))
+    advanceSession(client)
+  client.setQueryData(currentUserKey, id ? { steamid64: id } : null)
+}
 
 let applyInputs: ((inputs: { steamId: string; limit: number }) => void) | null = null
 
@@ -19,7 +30,10 @@ function Harness() {
   const [draftLimit, setDraftLimit] = useState('20')
   const [applied, setApplied] = useState({ steamId: '', limit: 20 })
   useEffect(() => {
-    applyInputs = setApplied
+    applyInputs = (inputs) => {
+      setTestIdentity(inputs.steamId)
+      setApplied(inputs)
+    }
     return () => {
       applyInputs = null
     }
@@ -32,6 +46,7 @@ function Harness() {
       <form
         onSubmit={(event) => {
           event.preventDefault()
+          setTestIdentity(draftId)
           setApplied({ steamId: draftId, limit: Number(draftLimit) })
         }}
       >
@@ -68,7 +83,7 @@ function Harness() {
 
 if (import.meta.env.DEV) {
   createRoot(document.getElementById('harness')!).render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <Harness />
     </QueryClientProvider>,
   )

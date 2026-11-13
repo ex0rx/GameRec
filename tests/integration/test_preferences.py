@@ -6,7 +6,6 @@ import pytest
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 
-from gamerec.core.config import settings
 from gamerec.models.game import Game
 from gamerec.models.user import User
 from gamerec.models.user_game import UserGame
@@ -18,13 +17,6 @@ USER_A = "76561190000000001"
 USER_B = "76561190000000002"
 MISSING = "76561190000000003"
 OLD_TIMESTAMP = datetime(2000, 1, 1, tzinfo=UTC)
-
-
-@pytest.fixture(autouse=True)
-def allowed_writes(monkeypatch):
-    monkeypatch.setattr(settings, "environment", "development")
-    monkeypatch.setattr(settings, "user_preference_writes_enabled", True)
-    monkeypatch.setattr(settings, "steamid64_test", USER_A)
 
 
 async def seed_catalogue(pg_sessions, *, users=(USER_A,), app_ids=(10,), owned=True):
@@ -42,9 +34,10 @@ async def seed_catalogue(pg_sessions, *, users=(USER_A,), app_ids=(10,), owned=T
 
 
 async def test_put_creates_then_updates_one_persisted_preference(
-    pg_client, pg_sessions
+    pg_client, pg_sessions, authenticate_pg_client
 ):
     await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     url = f"/users/{USER_A}/preferences/10"
     created = await pg_client.put(url, json={"preference": "liked"})
     assert created.status_code == 200
@@ -95,9 +88,10 @@ async def test_put_creates_then_updates_one_persisted_preference(
     ],
 )
 async def test_invalid_preference_returns_422_without_changing_state(
-    pg_client, pg_sessions, payload
+    pg_client, pg_sessions, payload, authenticate_pg_client
 ):
     await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     url = f"/users/{USER_A}/preferences/10"
     created = await pg_client.put(url, json={"preference": "liked"})
     assert created.status_code == 200
@@ -113,9 +107,11 @@ async def test_invalid_preference_returns_422_without_changing_state(
 
 
 @pytest.mark.parametrize("method", ["put", "get", "delete"])
-async def test_unknown_user_returns_404(pg_client, pg_sessions, monkeypatch, method):
+async def test_unknown_account_is_forbidden_before_user_lookup(
+    pg_client, pg_sessions, method, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions)
-    monkeypatch.setattr(settings, "steamid64_test", MISSING)
+    await authenticate_pg_client(USER_A)
     url = f"/users/{MISSING}/preferences"
     kwargs = {}
     if method != "get":
@@ -123,11 +119,8 @@ async def test_unknown_user_returns_404(pg_client, pg_sessions, monkeypatch, met
     if method == "put":
         kwargs["json"] = {"preference": "liked"}
     response = await pg_client.request(method, url, **kwargs)
-    assert response.status_code == 404
-    if method == "get":
-        assert response.json() == {"detail": f"User with steamid64 {MISSING} not found"}
-    else:
-        assert response.json()["detail"]["code"] == "user_not_found"
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "account_forbidden"
     async with pg_sessions() as db:
         assert await db.get(User, MISSING) is None
         assert (
@@ -136,8 +129,11 @@ async def test_unknown_user_returns_404(pg_client, pg_sessions, monkeypatch, met
 
 
 @pytest.mark.parametrize("method", ["put", "delete"])
-async def test_unknown_game_returns_404(pg_client, pg_sessions, method):
+async def test_unknown_game_returns_404(
+    pg_client, pg_sessions, method, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     kwargs = {"json": {"preference": "liked"}} if method == "put" else {}
     response = await pg_client.request(
         method, f"/users/{USER_A}/preferences/999", **kwargs
@@ -152,9 +148,10 @@ async def test_unknown_game_returns_404(pg_client, pg_sessions, method):
 
 
 async def test_existing_user_without_preferences_returns_empty_list(
-    pg_client, pg_sessions
+    pg_client, pg_sessions, authenticate_pg_client
 ):
     await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     response = await pg_client.get(f"/users/{USER_A}/preferences")
     assert response.status_code == 200
     assert response.json() == []
@@ -164,14 +161,21 @@ async def test_existing_user_without_preferences_returns_empty_list(
     "query, field",
     [("limit=0", "limit"), ("limit=101", "limit"), ("offset=-1", "offset")],
 )
-async def test_invalid_pagination_returns_422(pg_client, query, field):
+async def test_invalid_pagination_returns_422(
+    pg_client, query, field, authenticate_pg_client, pg_sessions
+):
+    await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     response = await pg_client.get(f"/users/{USER_A}/preferences?{query}")
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["query", field]
 
 
-async def test_get_paginates_by_app_id_and_isolates_users(pg_client, pg_sessions):
+async def test_get_paginates_by_app_id_and_isolates_users(
+    pg_client, pg_sessions, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions, users=(USER_A, USER_B), app_ids=range(1, 66))
+    await authenticate_pg_client(USER_A)
     async with pg_sessions() as db:
         db.add_all(
             UserGamePreference(steamid64=USER_A, steam_app_id=appid, preference="liked")
@@ -196,6 +200,7 @@ async def test_get_paginates_by_app_id_and_isolates_users(pg_client, pg_sessions
         assert [item["steam_app_id"] for item in response.json()] == expected
         assert all(item["steamid64"] == USER_A for item in response.json())
         assert all(item["preference"] == "liked" for item in response.json())
+    await authenticate_pg_client(USER_B)
     response = await pg_client.get(f"/users/{USER_B}/preferences")
     assert response.status_code == 200
     assert len(response.json()) == 1
@@ -205,9 +210,10 @@ async def test_get_paginates_by_app_id_and_isolates_users(pg_client, pg_sessions
 
 
 async def test_delete_is_idempotent_and_preserves_other_preferences(
-    pg_client, pg_sessions
+    pg_client, pg_sessions, authenticate_pg_client
 ):
     await seed_catalogue(pg_sessions, users=(USER_A, USER_B), app_ids=(10, 20))
+    await authenticate_pg_client(USER_A)
     async with pg_sessions() as db:
         db.add_all(
             UserGamePreference(steamid64=user, steam_app_id=appid, preference="liked")
@@ -235,8 +241,11 @@ async def test_delete_is_idempotent_and_preserves_other_preferences(
             assert all(row.preference == "liked" for row in rows)
 
 
-async def test_database_rejects_duplicate_composite_key(pg_client, pg_sessions):
+async def test_database_rejects_duplicate_composite_key(
+    pg_client, pg_sessions, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions)
+    await authenticate_pg_client(USER_A)
     response = await pg_client.put(
         f"/users/{USER_A}/preferences/10", json={"preference": "liked"}
     )
@@ -255,8 +264,11 @@ async def test_database_rejects_duplicate_composite_key(pg_client, pg_sessions):
         assert rows[0].preference == "liked"
 
 
-async def test_preferences_do_not_change_ownership_or_playtime(pg_client, pg_sessions):
+async def test_preferences_do_not_change_ownership_or_playtime(
+    pg_client, pg_sessions, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions, app_ids=(10, 20), owned=False)
+    await authenticate_pg_client(USER_A)
     async with pg_sessions() as db:
         db.add(
             UserGame(
@@ -305,8 +317,11 @@ async def test_preferences_do_not_change_ownership_or_playtime(pg_client, pg_ses
         assert (await db.get(User, USER_A)).library_last_synced_at == OLD_TIMESTAMP
 
 
-async def test_library_resync_preserves_explicit_preferences(pg_client, pg_sessions):
+async def test_library_resync_preserves_explicit_preferences(
+    pg_client, pg_sessions, authenticate_pg_client
+):
     await seed_catalogue(pg_sessions, app_ids=(10, 20), owned=False)
+    await authenticate_pg_client(USER_A)
     async with pg_sessions() as db:
         await save_steam_library(
             db,
@@ -354,9 +369,10 @@ async def test_library_resync_preserves_explicit_preferences(pg_client, pg_sessi
 
 
 async def test_unowned_put_is_rejected_but_legacy_record_remains_readable_and_clearable(
-    pg_client, pg_sessions
+    pg_client, pg_sessions, authenticate_pg_client
 ):
     await seed_catalogue(pg_sessions, owned=False)
+    await authenticate_pg_client(USER_A)
     url = f"/users/{USER_A}/preferences/10"
     rejected = await pg_client.put(url, json={"preference": "liked"})
     assert rejected.status_code == 404

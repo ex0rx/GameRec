@@ -2,79 +2,55 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { libraryGames, libraryResponse, pagedLibraryGames } from './library-fixtures'
 import { USER_A, USER_B, game } from './recommendation-fixtures'
+import { changeCurrentUser, mockCurrentUser } from './auth-fixtures'
 
 const libraryRoute = '**/api/users/*/library?**'
 const rows = (page: Page) => page.locator('article.library-game-row')
 
-async function selectLibrary(page: Page, id = USER_A) {
-  await page.getByLabel('Steam ID64', { exact: true }).fill(id)
-  await page.getByRole('button', { name: 'Load library', exact: true }).click()
-}
-
 test.beforeEach(async ({ page }) => {
+  await mockCurrentUser(page, USER_A)
   await page.route(libraryRoute, (route) => route.fulfill({ json: libraryResponse() }))
   await page.route('https://shared.fastly.steamstatic.com/**', (route) => route.abort())
 })
 
-test('Library navigation is active and an unselected library makes no API requests', async ({
-  page,
-}) => {
+test('Library navigation loads the signed-in owner without an ID form', async ({ page }) => {
   const calls: string[] = []
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(request.url())
+    if (new URL(request.url()).pathname.startsWith('/api/users/')) calls.push(request.url())
   })
   await page.goto('/discover')
+  expect(calls).toEqual([])
   await page.getByRole('link', { name: 'Library', exact: true }).click()
   await expect(page).toHaveURL('/library')
   await expect(page.getByRole('heading', { name: 'Game Library', exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Library', exact: true })).toHaveAttribute(
-    'aria-current',
-    'page',
-  )
-  await expect(page.getByRole('link', { name: 'Discover', exact: true })).not.toHaveAttribute(
-    'aria-current',
-  )
-  await expect(rows(page)).toHaveCount(0)
-  await expect(page.getByRole('link', { name: 'View recommendations', exact: true })).toHaveCount(0)
+  await expect(page.getByRole('link', { name: 'Library', exact: true })).toHaveAttribute('aria-current', 'page')
+  await expect(rows(page)).toHaveCount(3)
+  await expect(page.getByLabel('Steam ID64', { exact: true })).toHaveCount(0)
+  expect(calls).toHaveLength(1)
+})
+
+test('invalid and other-account legacy routes never fetch a target library', async ({ page }) => {
+  const calls: string[] = []
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/api/users/')) calls.push(request.url())
+  })
+  for (const id of ['invalid', '7656119000000000', '765611900000000001', USER_B]) {
+    await page.goto(`/library/${id}`)
+    await expect(rows(page)).toHaveCount(0)
+    await expect(page.getByRole('heading', { name: 'Library unavailable' })).toBeVisible()
+  }
   expect(calls).toEqual([])
 })
 
-test('form and direct routes reject invalid identifiers before fetching', async ({ page }) => {
-  let calls = 0
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls++
-  })
-  await page.goto('/library')
-  for (const id of [
-    '',
-    '   ',
-    '123',
-    '7656119000000000a',
-    '765611900000000001',
-    '７６５６１１９０００００００００１',
-  ]) {
-    await selectLibrary(page, id)
-    await expect(page.getByRole('alert')).toContainText(
-      'Enter a Steam ID64 containing exactly 17 digits.',
-    )
-  }
-  for (const id of ['invalid', '7656119000000000', '765611900000000001']) {
-    await page.goto(`/library/${id}`)
-    await expect(rows(page)).toHaveCount(0)
-  }
-  expect(calls).toBe(0)
-})
-
-test('trimmed string ID requests the stored library and preserves sparse server data and order', async ({
+test('verified string ID requests the stored library and preserves sparse server data and order', async ({
   page,
 }) => {
   const calls: string[] = []
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(request.url())
+    if (new URL(request.url()).pathname.startsWith('/api/') && !request.url().includes('/auth/')) calls.push(request.url())
   })
-  await page.goto('/library')
   const pending = page.waitForRequest(libraryRoute)
-  await selectLibrary(page, `  ${USER_A}  `)
+  await page.goto('/library')
   const request = await pending
   expect(request.method()).toBe('GET')
   const url = new URL(request.url())
@@ -83,7 +59,7 @@ test('trimmed string ID requests the stored library and preserves sparse server 
     ['limit', '50'],
     ['offset', '0'],
   ])
-  await expect(page).toHaveURL(`/library/${USER_A}`)
+  await expect(page).toHaveURL('/library')
   await expect(rows(page)).toHaveCount(3)
   await expect(rows(page).getByRole('heading', { level: 3 })).toHaveText([
     libraryGames[0].name,
@@ -120,7 +96,7 @@ test('loading and null sync timestamp are represented without invented metadata'
     await pending
     await route.fulfill({ json: libraryResponse(undefined, { syncedAt: null }) })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(page.getByRole('status', { name: 'Loading library' })).toBeVisible()
   await expect(rows(page)).toHaveCount(0)
   release()
@@ -140,14 +116,14 @@ test('pagination, partial final page, reload and browser history restore URL sta
       json: libraryResponse(pagedLibraryGames.slice(offset, offset + 50), { total: 65, offset }),
     })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(rows(page)).toHaveCount(50)
   await expect(rows(page).first()).toContainText('20 hrs')
   const navigation = page.getByRole('navigation', { name: 'Library pages' })
   await expect(navigation.getByRole('button', { name: 'Previous', exact: true })).toBeDisabled()
   await expect(page.getByText('1–50 of 65 games')).toBeVisible()
   await navigation.getByRole('button', { name: 'Next', exact: true }).click()
-  await expect(page).toHaveURL(`/library/${USER_A}?page=2`)
+  await expect(page).toHaveURL(`/library?page=2`)
   await expect(rows(page)).toHaveCount(15)
   await expect(rows(page).first()).toContainText('Stored game 51')
   await expect(page.getByText('51–65 of 65 games')).toBeVisible()
@@ -165,7 +141,7 @@ test('pagination, partial final page, reload and browser history restore URL sta
 test('malformed and unsafe page parameters request the first page', async ({ page }) => {
   for (const value of ['0', '-1', 'abc', '1.5', '9007199254740991', '999999999999999999999']) {
     const pending = page.waitForRequest(libraryRoute)
-    await page.goto(`/library/${USER_A}?page=${value}`)
+    await page.goto(`/library?page=${value}`)
     expect(new URL((await pending).url()).searchParams.get('offset')).toBe('0')
     await expect(rows(page)).toHaveCount(3)
   }
@@ -178,40 +154,29 @@ test('an out-of-range page offers a return to the first page', async ({ page }) 
       json: libraryResponse(offset ? [] : libraryGames, { total: 3, offset }),
     })
   })
-  await page.goto(`/library/${USER_A}?page=3`)
+  await page.goto(`/library?page=3`)
   await expect(rows(page)).toHaveCount(0)
   await page.getByRole('link', { name: 'Return to first page', exact: true }).click()
   await expect(rows(page)).toHaveCount(3)
   expect(new URL(page.url()).searchParams.has('page')).toBe(false)
 })
 
-test('switching identity resets pagination, cancels the old request and isolates late responses', async ({
-  page,
-}) => {
+test('session identity changes cancel old library reads and isolate late responses', async ({ page }) => {
+  const session = await mockCurrentUser(page, USER_A)
   let release!: () => void
-  const pending = new Promise<void>((resolve) => {
-    release = resolve
-  })
+  const pending = new Promise<void>((resolve) => { release = resolve })
   await page.route(libraryRoute, async (route) => {
-    const url = new URL(route.request().url())
-    if (url.pathname.includes(USER_A)) {
+    if (route.request().url().includes(USER_A)) {
       await pending
-      await route
-        .fulfill({ json: libraryResponse([libraryGames[0]], { offset: 50 }) })
-        .catch(() => {})
+      await route.fulfill({ json: libraryResponse([libraryGames[0]]) }).catch(() => {})
     } else {
       await route.fulfill({ json: libraryResponse([libraryGames[1]], { steamId: USER_B }) })
     }
   })
-  await page.goto(`/library/${USER_A}?page=2`)
+  await page.goto('/library')
   await expect(page.getByRole('status', { name: 'Loading library' })).toBeVisible()
-  const cancelled = page.waitForEvent('requestfailed', (request) =>
-    request.url().includes(`/users/${USER_A}/library`),
-  )
-  const next = page.waitForRequest((request) => request.url().includes(`/users/${USER_B}/library`))
-  await selectLibrary(page, USER_B)
-  expect(new URL((await next).url()).searchParams.get('offset')).toBe('0')
-  await expect(page).toHaveURL(`/library/${USER_B}`)
+  const cancelled = page.waitForEvent('requestfailed', (request) => request.url().includes(`/users/${USER_A}/library`))
+  await changeCurrentUser(page, session, USER_B)
   await expect(rows(page)).toHaveCount(1)
   await expect(rows(page).first()).toContainText(libraryGames[1].name)
   release()
@@ -221,12 +186,12 @@ test('switching identity resets pagination, cancels the old request and isolates
 
 test('empty storage does not claim that the Steam account owns no games', async ({ page }) => {
   await page.route(libraryRoute, (route) => route.fulfill({ json: libraryResponse([]) }))
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(
     page.getByRole('heading', { name: 'No games stored for this library' }),
   ).toBeVisible()
   await expect(rows(page)).toHaveCount(0)
-  await expect(page.getByText(/does not establish that the Steam library is empty/)).toBeVisible()
+  await expect(page.getByText(/does not establish whether your Steam library is empty/)).toBeVisible()
 })
 
 for (const status of [404, 503, 0]) {
@@ -240,7 +205,7 @@ for (const status of [404, 503, 0]) {
         ? route.fulfill({ status, json: { detail: 'Synthetic failure' } })
         : route.abort()
     })
-    await page.goto(`/library/${USER_A}`)
+    await page.goto('/library')
     await expect(
       page.getByRole('heading', {
         name: status === 404 ? 'No stored library found' : 'Library couldn’t be loaded',
@@ -262,9 +227,9 @@ test('game inspection is keyboard accessible and makes no explanation or mutatio
   const calls: string[] = []
   page.on('request', (request) => {
     const url = new URL(request.url())
-    if (url.pathname.startsWith('/api/')) calls.push(`${request.method()} ${url.pathname}`)
+    if (url.pathname.startsWith('/api/') && !url.pathname.startsWith('/api/auth/')) calls.push(`${request.method()} ${url.pathname}`)
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(rows(page)).toHaveCount(3)
   const inspect = page.getByRole('button', { name: `Inspect ${libraryGames[0].name}`, exact: true })
   await inspect.focus()
@@ -286,7 +251,7 @@ test('game inspection is keyboard accessible and makes no explanation or mutatio
   expect(calls).toEqual([`GET /api/users/${USER_A}/library`])
 })
 
-test('explicit recommendations handoff carries the exact string ID once without a URL identity', async ({
+test('Library link and reload use the session account without a URL identity', async ({
   page,
 }) => {
   let calls = 0
@@ -294,7 +259,7 @@ test('explicit recommendations handoff carries the exact string ID once without 
     calls++
     return route.fulfill({ json: { total: 1, limit: 20, games: [game] } })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(rows(page)).toHaveCount(3)
   expect(calls).toBe(0)
   const request = page.waitForRequest('**/api/recommendations')
@@ -305,8 +270,8 @@ test('explicit recommendations handoff carries the exact string ID once without 
   expect(await page.evaluate(() => window.history.state.usr)).toBeNull()
   expect(await page.evaluate(() => ({ ...localStorage, ...sessionStorage }))).toEqual({})
   await page.reload()
-  await expect(page.getByRole('heading', { name: 'No profile selected' })).toBeVisible()
-  expect(calls).toBe(1)
+  await expect(page.getByRole('article')).toHaveCount(1)
+  expect(calls).toBe(2)
 })
 
 for (const width of [320, 390, 768, 1440]) {
@@ -315,7 +280,7 @@ for (const width of [320, 390, 768, 1440]) {
   }) => {
     await page.setViewportSize({ width, height: 1000 })
     await page.emulateMedia({ reducedMotion: 'reduce' })
-    await page.goto(`/library/${USER_A}`)
+    await page.goto('/library')
     await expect(rows(page)).toHaveCount(3)
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
@@ -346,7 +311,7 @@ test('library client options and query keys preserve identity and isolate pages'
     requests.push(new URL(route.request().url()))
     return route.fulfill({ json: libraryResponse() })
   })
-  await page.goto('/library')
+  await page.goto('/discover')
   const keys = await page.evaluate(
     async ({ first, second }) => {
       const clientUrl = '/src/api/client.ts'
@@ -379,18 +344,18 @@ test('library client options and query keys preserve identity and isolate pages'
   expect(keys[0]).not.toEqual(keys[3])
 })
 
-test('malformed recommendation handoff state is discarded without fetching', async ({ page }) => {
-  const calls: string[] = []
-  page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(request.url())
+test('router-state account cannot override the authenticated recommendation identity', async ({ page }) => {
+  const bodies: unknown[] = []
+  await page.route('**/api/recommendations', (route) => {
+    bodies.push(route.request().postDataJSON())
+    return route.fulfill({ json: { total: 1, limit: 20, games: [game] } })
   })
-  await page.addInitScript(() => {
-    window.history.replaceState({ ...window.history.state, usr: { steamId: 123 } }, '')
-  })
+  await page.addInitScript((steamId) => {
+    window.history.replaceState({ ...window.history.state, usr: { steamId } }, '')
+  }, USER_B)
   await page.goto('/recommendations')
-  await expect(page.getByRole('heading', { name: 'No profile selected' })).toBeVisible()
-  await expect.poll(() => page.evaluate(() => window.history.state.usr)).toBeNull()
-  expect(calls).toEqual([])
+  await expect(page.getByRole('article')).toHaveCount(1)
+  expect(bodies).toEqual([{ steamid64: USER_A, limit: 20 }])
 })
 
 test('library loading and empty states have desktop and mobile visual evidence', async ({
@@ -404,7 +369,7 @@ test('library loading and empty states have desktop and mobile visual evidence',
     await pending
     await route.fulfill({ json: libraryResponse([]) })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(page.getByRole('status', { name: 'Loading library' })).toBeVisible()
   for (const [name, width, height] of [
     ['desktop', 1440, 1080],

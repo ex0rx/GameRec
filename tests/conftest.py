@@ -53,6 +53,29 @@ def block_live_http(monkeypatch):
 
 
 @pytest.fixture
+def authenticated_user(monkeypatch):
+    """Opt-in synthetic session resolution, retaining the real auth dependency."""
+    from gamerec.api import auth
+    from gamerec.core.config import settings
+
+    for name, value in {
+        "auth_enabled": True,
+        "auth_public_base_url": "http://localhost:5173/api",
+        "auth_frontend_origin": "http://localhost:5173",
+        "auth_cookie_secure": False,
+        "auth_session_cookie_name": "gamerec_session",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    user = SimpleNamespace(steamid64="76561190000000001")
+    monkeypatch.setattr(
+        auth,
+        "resolve_session_user",
+        AsyncMock(side_effect=lambda _db, token: user if token == "s" * 43 else None),
+    )
+    return user
+
+
+@pytest.fixture
 def fake_db():
     db = Mock(spec=AsyncSession)
     db.execute = AsyncMock()

@@ -35,14 +35,7 @@ def payload(count=1):
 
 
 @pytest.fixture
-def allowed(monkeypatch):
-    monkeypatch.setattr(settings, "environment", "development")
-    monkeypatch.setattr(settings, "manual_library_sync_enabled", True)
-    monkeypatch.setattr(settings, "steamid64_test", USER)
-
-
-@pytest.fixture
-def pipeline(monkeypatch, fake_db, allowed):
+def pipeline(monkeypatch, fake_db):
     clients = []
 
     def client(**kwargs):
@@ -65,7 +58,7 @@ def pipeline(monkeypatch, fake_db, allowed):
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch, fake_db):
+async def client(monkeypatch, fake_db, authenticated_user):
     coordinator = sync.LibrarySyncCoordinator()
 
     async def override_db():
@@ -80,29 +73,26 @@ async def client(monkeypatch, fake_db):
         app.dependency_overrides, users.get_sync_coordinator, override_coordinator
     )
     async with HTTP_CLIENT(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        cookies={"gamerec_session": "s" * 43},
+        headers={"Origin": "http://localhost:5173"},
     ) as client:
         yield client
 
 
 @pytest.mark.parametrize(
-    "field,value",
-    [
-        ("environment", "production"),
-        ("manual_library_sync_enabled", False),
-        ("steamid64_test", None),
-        ("steamid64_test", "invalid"),
-        ("steamid64_test", "７" * 17),
-        ("steamid64_test", OTHER),
-    ],
+    "identity,cookie,status",
+    [(USER, None, 401), (USER, "bad", 401), (OTHER, "s" * 43, 403)],
 )
-async def test_permission_fails_closed_before_storage_or_steam(
-    monkeypatch, client, fake_db, pipeline, field, value
+async def test_authorization_fails_before_storage_or_steam(
+    client, fake_db, pipeline, identity, cookie, status
 ):
-    monkeypatch.setattr(settings, field, value)
-    response = await client.post(f"/users/{USER}/library/sync")
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "sync_forbidden"
+    client.cookies.clear()
+    if cookie is not None:
+        client.cookies.set("gamerec_session", cookie)
+    response = await client.post(f"/users/{identity}/library/sync")
+    assert response.status_code == status
     pipeline[0].assert_not_called()
     fake_db.scalar.assert_not_called()
 
@@ -334,7 +324,9 @@ async def test_coordinator_rejections_do_not_extend_clock(monkeypatch):
     assert coordinator.retry_at[USER] == 220
 
 
-async def test_library_capability_uses_identical_policy(monkeypatch, client, allowed):
+async def test_library_capability_uses_owner_policy_in_all_environments(
+    monkeypatch, client
+):
     monkeypatch.setattr(
         users,
         "get_user_library",
@@ -351,7 +343,7 @@ async def test_library_capability_uses_identical_policy(monkeypatch, client, all
     )
     assert (await client.get(f"/users/{USER}/library")).json()["sync_allowed"] is True
     monkeypatch.setattr(settings, "environment", "production")
-    assert (await client.get(f"/users/{USER}/library")).json()["sync_allowed"] is False
+    assert (await client.get(f"/users/{USER}/library")).json()["sync_allowed"] is True
 
 
 async def test_metadata_rollback_failure_retains_completed_import(

@@ -108,7 +108,7 @@ test('keys normalize defaults, preserve strings and include each result paramete
   expect(keys[4]).toEqual(keys[5])
 })
 
-test('hook isolates IDs and limits while reusing fresh same-key responses', async ({ page }) => {
+test('hook isolates authenticated accounts and reuses same-session result limits', async ({ page }) => {
   const bodies: RecommendationRequest[] = []
   await page.route('**/api/recommendations', (route) => {
     const body = route.request().postDataJSON() as RecommendationRequest
@@ -142,6 +142,7 @@ test('hook isolates IDs and limits while reusing fresh same-key responses', asyn
     { steamid64: USER_A, limit: 20 },
     { steamid64: USER_A, limit: 50 },
     { steamid64: USER_B, limit: 20 },
+    { steamid64: USER_A, limit: 20 },
   ])
 })
 
@@ -159,7 +160,7 @@ for (const status of [404, 422, 503]) {
       status === 404
         ? 'No stored user'
         : status === 422
-          ? 'Check the Steam ID'
+          ? 'Check'
           : 'temporarily unavailable'
     await expect(page.getByRole('alert')).toContainText(message)
     expect(calls).toBe(1)

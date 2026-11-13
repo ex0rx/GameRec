@@ -8,4 +8,5 @@ export default defineConfig({
   workers: 1,
   outputDir: './live-results',
   timeout: 240_000,
+  use: { ...config.use, trace: 'off', screenshot: 'off', video: 'off' },
 })

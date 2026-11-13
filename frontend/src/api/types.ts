@@ -1,4 +1,8 @@
 /** Wire contracts from GameRec's existing FastAPI schemas. */
+export interface CurrentUser {
+  steamid64: string
+}
+
 export interface SearchGame {
   steam_app_id: number
   name: string

@@ -1,4 +1,4 @@
-"""Bounded, development-only sync. Coordination supports one local API worker."""
+"""Bounded sync for authorized callers. Coordination supports one API worker."""
 
 import asyncio
 import logging
@@ -12,8 +12,6 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from gamerec.core.config import settings
-from gamerec.core.development_access import is_development_test_account
 from gamerec.integrations.request_pacer import RequestPacer
 from gamerec.integrations.steam import fetch_steam_owned_games, normalise_owned_games
 from gamerec.models.game import Game
@@ -26,12 +24,6 @@ from gamerec.services.steam_library import save_steam_library
 logger = logging.getLogger(__name__)
 CORE_TIMEOUT_SECONDS = 120
 METADATA_TIMEOUT_SECONDS = 30
-
-
-def sync_allowed(steamid64: str) -> bool:
-    return settings.manual_library_sync_enabled and is_development_test_account(
-        steamid64
-    )
 
 
 class LibrarySyncError(Exception):
@@ -98,10 +90,6 @@ def upstream_retry_seconds(value: str | None) -> float:
 async def sync_library(
     db: AsyncSession, steamid64: str, coordinator: LibrarySyncCoordinator
 ) -> LibrarySyncResponse:
-    if not sync_allowed(steamid64):
-        raise LibrarySyncError(
-            403, "sync_forbidden", "Manual library sync is not allowed."
-        )
     coordinator.reserve(steamid64)
     try:
 

@@ -22,8 +22,6 @@ OTHER = "76561190000000002"
 @pytest.fixture
 def services(monkeypatch):
     monkeypatch.setattr(settings, "environment", "development")
-    monkeypatch.setattr(settings, "user_preference_writes_enabled", True)
-    monkeypatch.setattr(settings, "manual_library_sync_enabled", False)
     monkeypatch.setattr(settings, "steamid64_test", USER)
     saved = SimpleNamespace(
         steamid64=USER,
@@ -39,40 +37,30 @@ def services(monkeypatch):
 
 
 @pytest_asyncio.fixture
-async def client(monkeypatch, fake_db, services):
+async def client(monkeypatch, fake_db, services, authenticated_user):
     async def override_db():
         yield fake_db
 
     monkeypatch.setitem(app.dependency_overrides, get_db, override_db)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://test",
+        cookies={"gamerec_session": "s" * 43},
+        headers={"Origin": "http://localhost:5173"},
     ) as client:
         yield client
 
 
 @pytest.mark.parametrize("method", ["put", "delete"])
-@pytest.mark.parametrize(
-    "field,value",
-    [
-        ("environment", "production"),
-        ("user_preference_writes_enabled", False),
-        ("steamid64_test", None),
-        ("steamid64_test", "invalid"),
-        ("steamid64_test", "７" * 17),
-        ("steamid64_test", OTHER),
-    ],
-)
-async def test_writes_fail_closed_before_database(
-    client, fake_db, services, monkeypatch, method, field, value
+@pytest.mark.parametrize("configured_account", [None, "invalid", OTHER])
+async def test_owner_writes_do_not_depend_on_development_allowlist(
+    client, services, monkeypatch, method, configured_account
 ):
-    monkeypatch.setattr(settings, field, value)
+    monkeypatch.setattr(settings, "steamid64_test", configured_account)
     kwargs = {"json": {"preference": "liked"}} if method == "put" else {}
     response = await client.request(method, f"/users/{USER}/preferences/10", **kwargs)
-    assert response.status_code == 403
-    assert response.json()["detail"]["code"] == "preference_forbidden"
-    fake_db.begin.assert_not_called()
-    for service in services:
-        service.assert_not_called()
+    assert response.status_code == (200 if method == "put" else 204)
+    services[0 if method == "put" else 1].assert_awaited_once()
 
 
 @pytest.mark.parametrize("method", ["put", "delete"])
@@ -98,7 +86,7 @@ async def test_invalid_values_are_422(client, services, value):
     services[0].assert_not_called()
 
 
-async def test_put_and_delete_reuse_contract_independent_of_sync_flag(
+async def test_put_and_delete_reuse_contract_for_authenticated_owner(
     client, fake_db, services
 ):
     response = await client.put(
@@ -136,7 +124,7 @@ async def test_invalid_app_id_is_422(client, services, appid):
     services[0].assert_not_called()
 
 
-async def test_library_write_capability_shares_policy_without_sync_requirement(
+async def test_library_capabilities_follow_authenticated_owner_policy(
     client, monkeypatch
 ):
     monkeypatch.setattr(
@@ -155,8 +143,23 @@ async def test_library_write_capability_shares_policy_without_sync_requirement(
     )
     response = await client.get(f"/users/{USER}/library")
     assert response.json()["preference_writes_allowed"] is True
-    assert response.json()["sync_allowed"] is False
+    assert response.json()["sync_allowed"] is True
     monkeypatch.setattr(settings, "environment", "production")
     assert (await client.get(f"/users/{USER}/library")).json()[
         "preference_writes_allowed"
-    ] is False
+    ] is True
+
+
+@pytest.mark.parametrize("preference", ["liked", "disliked", "neutral"])
+async def test_all_existing_preference_values_are_forwarded_unchanged(
+    client, services, fake_db, preference
+):
+    services[0].return_value.preference = preference
+    response = await client.put(
+        f"/users/{USER}/preferences/10", json={"preference": preference}
+    )
+    assert response.status_code == 200
+    assert response.json()["preference"] == preference
+    services[0].assert_awaited_once_with(
+        db=fake_db, steamid64=USER, steam_app_id=10, preference=preference
+    )

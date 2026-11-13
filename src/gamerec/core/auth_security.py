@@ -72,6 +72,11 @@ def require_auth_enabled() -> None:
         raise AuthError(503, "authentication_unavailable")
 
 
+def require_account_owner(authenticated_id: str, requested_id: str) -> None:
+    if authenticated_id != requested_id:
+        raise AuthError(403, "account_forbidden")
+
+
 def require_trusted_origin(request: Request) -> None:
     require_auth_enabled()
     parsed = urlsplit(settings.auth_public_base_url or "")

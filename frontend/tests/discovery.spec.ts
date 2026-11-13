@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
+import { mockCurrentUser } from './auth-fixtures'
 
 // Synthetic wire responses are limited to these isolated interaction tests.
 const games = [
@@ -51,6 +52,7 @@ async function mockSearch(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await mockCurrentUser(page, null)
   await mockSearch(page)
 })
 
@@ -59,7 +61,7 @@ test('starting screen and example selection do not call search or explanations',
 }) => {
   const calls: string[] = []
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls.push(request.url())
+    if (new URL(request.url()).pathname.startsWith('/api/') && !request.url().includes('/auth/')) calls.push(request.url())
   })
   await page.goto('/')
   await expect(page).toHaveURL(/\/discover$/)
@@ -132,7 +134,7 @@ test('URL restoration, reload and history preserve submitted search', async ({ p
 test('invalid queries and inverted years never call the API', async ({ page }) => {
   let calls = 0
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) calls++
+    if (new URL(request.url()).pathname.startsWith('/api/') && !request.url().includes('/auth/')) calls++
   })
   await page.goto('/discover')
   await page.getByRole('button', { name: 'Search', exact: true }).click()

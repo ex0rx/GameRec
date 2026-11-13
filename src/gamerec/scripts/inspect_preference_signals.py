@@ -186,8 +186,7 @@ async def inspect(app_ids: list[int] | None = None) -> dict:
         )
         return {
             "selected_games": selected_signals,
-            "write_permission_configured": settings.environment == "development"
-            and settings.user_preference_writes_enabled,
+            "authentication_required": True,
             "owned_games": len(rows),
             "embedded_owned_games": len(usable),
             "library_last_synced_at": synced_at.isoformat() if synced_at else None,

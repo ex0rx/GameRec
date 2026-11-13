@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test'
 import type { Page } from '@playwright/test'
 import { libraryGames, libraryResponse } from './library-fixtures'
 import { USER_A, USER_B } from './recommendation-fixtures'
+import { changeCurrentUser, mockCurrentUser } from './auth-fixtures'
 
 const libraryRoute = '**/api/users/*/library?**'
 const syncRoute = '**/api/users/*/library/sync'
@@ -16,28 +17,23 @@ const completed = (steamId = USER_A, partial = false) => ({
 })
 
 async function selectLibrary(page: Page, id: string) {
-  await page.getByLabel('Steam ID64', { exact: true }).fill(id)
-  await page.getByRole('button', { name: 'Load library', exact: true }).click()
+  const session = await mockCurrentUser(page, id)
+  await changeCurrentUser(page, session, id)
 }
 
 test.beforeEach(async ({ page }) => {
+  await mockCurrentUser(page, USER_A)
   await page.route(libraryRoute, (route) =>
     route.fulfill({ json: libraryResponse(undefined, { syncAllowed: true }) }),
   )
   await page.route('https://shared.fastly.steamstatic.com/**', (route) => route.abort())
 })
 
-test('sync is hidden until the library explicitly permits it and never runs automatically', async ({
-  page,
-}) => {
+test('sync is hidden when the owner library does not permit it and never runs automatically', async ({ page }) => {
   const writes: string[] = []
-  page.on('request', (request) => {
-    if (request.method() !== 'GET') writes.push(request.url())
-  })
-  await page.goto('/library')
-  await expect(page.getByRole('button', { name: 'Sync Library' })).toHaveCount(0)
+  page.on('request', (request) => { if (request.method() !== 'GET') writes.push(request.url()) })
   await page.route(libraryRoute, (route) => route.fulfill({ json: libraryResponse() }))
-  await selectLibrary(page, USER_A)
+  await page.goto('/library')
   await expect(rows(page)).toHaveCount(3)
   await expect(page.getByRole('button', { name: 'Sync Library' })).toHaveCount(0)
   expect(writes).toEqual([])
@@ -59,7 +55,7 @@ test('sync posts the exact string ID, retains rows, prevents duplicate clicks an
     await pending
     await route.fulfill({ json: completed() })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   const button = page.getByRole('button', { name: 'Sync Library', exact: true })
   await button.focus()
   await page.keyboard.press('Enter')
@@ -83,7 +79,7 @@ test('completed sync refreshes stored data and reports partial metadata without 
   const calls: string[] = []
   page.on('request', (request) => {
     const path = new URL(request.url()).pathname
-    if (path.startsWith('/api/')) calls.push(`${request.method()} ${path}`)
+    if (path.startsWith('/api/') && !path.startsWith('/api/auth/')) calls.push(`${request.method()} ${path}`)
   })
   await page.route(libraryRoute, (route) => {
     reads++
@@ -102,7 +98,7 @@ test('completed sync refreshes stored data and reports partial metadata without 
     })
   })
   await page.route(syncRoute, (route) => route.fulfill({ json: completed(USER_A, true) }))
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await expect(rows(page)).toHaveCount(3)
   await page.getByRole('button', { name: 'Sync Library', exact: true }).click()
   await expect(page.getByText(/Library synced\./)).toBeVisible()
@@ -143,7 +139,7 @@ test('failed background refresh preserves snapshot and offers a read-only retry'
     writes++
     return route.fulfill({ json: completed() })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await page.getByRole('button', { name: 'Sync Library', exact: true }).click()
   await expect(page.getByText(/displayed snapshot could not be refreshed/)).toBeVisible()
   await expect(page.getByText(/Library synced\./)).toBeVisible()
@@ -154,7 +150,7 @@ test('failed background refresh preserves snapshot and offers a read-only retry'
   expect(writes).toBe(1)
 })
 
-test('switching accounts isolates pending feedback and invalidates only the original account', async ({
+test("switching sessions isolates feedback and ignores an earlier account’s completed sync", async ({
   page,
 }) => {
   let release!: () => void
@@ -176,7 +172,7 @@ test('switching accounts isolates pending feedback and invalidates only the orig
     await pending
     await route.fulfill({ json: completed() })
   })
-  await page.goto(`/library/${USER_A}`)
+  await page.goto('/library')
   await page.getByRole('button', { name: 'Sync Library', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Syncing…', exact: true })).toBeDisabled()
   await selectLibrary(page, USER_B)
@@ -186,7 +182,7 @@ test('switching accounts isolates pending feedback and invalidates only the orig
   await expect(page.getByText(/Library synced\./)).toHaveCount(0)
   expect(reads[USER_B]).toBe(1)
   await selectLibrary(page, USER_A)
-  await expect(page.getByText(/Library synced\./)).toBeVisible()
+  await expect(page.getByText(/Library synced\./)).toHaveCount(0)
   await expect.poll(() => reads[USER_A]).toBe(2)
   expect(reads[USER_B]).toBe(1)
 })
@@ -217,7 +213,7 @@ test('sync invalidates all original-user pages and recommendation limits while r
 })
 
 for (const [status, code, message] of [
-  [403, 'sync_forbidden', /not permitted/],
+  [403, 'account_forbidden', /signed-in owner/],
   [409, 'sync_in_progress', /already running/],
   [429, 'sync_cooldown', /wait 42 seconds/],
   [503, 'steam_unavailable', /visible library/],
@@ -240,7 +236,7 @@ for (const [status, code, message] of [
           })
         : route.abort()
     })
-    await page.goto(`/library/${USER_A}`)
+    await page.goto('/library')
     await page.getByRole('button', { name: 'Sync Library', exact: true }).click()
     await expect(page.getByRole('alert')).toContainText(message)
     await expect(rows(page)).toHaveCount(3)

@@ -53,6 +53,7 @@ async def auth_error_handler(_request: Request, exc: AuthError) -> JSONResponse:
         "authentication_unavailable": "Authentication is temporarily unavailable.",
         "authentication_required": "Sign in with Steam to continue.",
         "csrf_failed": "The request origin is not trusted.",
+        "account_forbidden": "Access is restricted to your signed-in account.",
     }
     return JSONResponse(
         status_code=exc.status_code,
@@ -67,9 +68,12 @@ async def get_current_user(
 ) -> User:
     require_auth_enabled()
     try:
-        user = await resolve_session_user(
-            db, read_cookie(request, settings.auth_session_cookie_name)
-        )
+        # End the read transaction before account handlers start their writes.
+        # SessionLocal uses expire_on_commit=False, so loaded identity stays usable.
+        async with db.begin():
+            user = await resolve_session_user(
+                db, read_cookie(request, settings.auth_session_cookie_name)
+            )
     except (SQLAlchemyError, OSError) as exc:
         raise unavailable(exc) from None
     if user is None:

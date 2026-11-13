@@ -1,12 +1,16 @@
 import { ArrowUpRight, Compass, Library, ListFilter, MoveUpRight } from 'lucide-react'
-import { Link, Navigate, NavLink, Route, Routes } from 'react-router-dom'
+import { Link, Navigate, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { DiscoveryPage } from '../features/discovery/DiscoveryPage'
 import { RecommendationsPage } from '../features/recommendations/RecommendationsPage'
 import { LibraryPage } from '../features/library/LibraryPage'
+import { AccountControl } from '../features/auth/AccountControl'
+import { LegacyLibraryRoute, LoginReturn, RequireAuth } from '../features/auth/AuthBoundary'
 
 export function App() {
+  const location = useLocation()
   return (
     <div className="app-shell">
+      <LoginReturn />
       <a className="skip-link" href="#main">
         Skip to content
       </a>
@@ -19,6 +23,7 @@ export function App() {
             GameRec<span className="brand-caption">A different way to find games</span>
           </span>
         </Link>
+        <AccountControl />
         <div className="nav-label">Your next session</div>
         <nav aria-label="Primary navigation" className="primary-nav">
           <NavLink to="/discover">
@@ -43,9 +48,11 @@ export function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/discover" replace />} />
           <Route path="/discover" element={<DiscoveryPage />} />
-          <Route path="/recommendations" element={<RecommendationsPage />} />
-          <Route path="/library" element={<LibraryPage />} />
-          <Route path="/library/:steamid64" element={<LibraryPage />} />
+          <Route element={<RequireAuth key={location.pathname} />}>
+            <Route path="/recommendations" element={<RecommendationsPage />} />
+            <Route path="/library" element={<LibraryPage />} />
+            <Route path="/library/:steamid64" element={<LegacyLibraryRoute />} />
+          </Route>
           <Route
             path="*"
             element={

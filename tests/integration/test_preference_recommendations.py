@@ -15,6 +15,7 @@ from qdrant_client import AsyncQdrantClient
 from gamerec.core.config import settings
 from gamerec.models import Game, GameEmbedding, User, UserGame
 from gamerec.services import personalised_recommendation as recommendations
+from gamerec.services.hybrid_user_recommendation import RankedCandidate
 from gamerec.services.user_profile import build_user_profile_vector
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
@@ -22,11 +23,8 @@ USER = "76561190000000001"
 
 
 async def test_persisted_like_dislike_clear_change_real_pipeline_signals(
-    pg_sessions, pg_client, monkeypatch
+    pg_sessions, pg_client, monkeypatch, authenticate_pg_client
 ):
-    monkeypatch.setattr(settings, "environment", "development")
-    monkeypatch.setattr(settings, "user_preference_writes_enabled", True)
-    monkeypatch.setattr(settings, "steamid64_test", USER)
     monkeypatch.setattr(settings, "embeddings_vector_size", 3)
     vectors = {
         10: [1.0, 0.0, 0.0],
@@ -73,6 +71,7 @@ async def test_persisted_like_dislike_clear_change_real_pipeline_signals(
         )
         await db.commit()
 
+    await authenticate_pg_client(USER)
     clients = []
 
     def qdrant():
@@ -91,8 +90,9 @@ async def test_persisted_like_dislike_clear_change_real_pipeline_signals(
     monkeypatch.setattr(recommendations, "get_qdrant_client", qdrant)
 
     async def evaluate():
-        async with pg_sessions() as db:
-            result = await recommendations.get_user_recommendations(db, USER)
+        response = await pg_client.post("/recommendations", json={"steamid64": USER})
+        assert response.status_code == 200
+        result = [RankedCandidate(**game) for game in response.json()["games"]]
         async with pg_sessions() as db:
             profile, owned = await build_user_profile_vector(db, USER)
         assert owned == {10, 20, 30}

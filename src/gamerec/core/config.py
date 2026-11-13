@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     database_url: str
     steam_api_key: str
     steamid64_test: str | None = None
-    manual_library_sync_enabled: bool = False
-    user_preference_writes_enabled: bool = False
     manual_library_sync_cooldown_seconds: int = Field(default=60, gt=0)
     embeddings_model_name: str
     embeddings_model_revision: str

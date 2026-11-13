@@ -6,6 +6,8 @@ Model metadata defines the test schema; these fixtures do not replay migrations.
 """
 
 import os
+import secrets
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -17,8 +19,13 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import gamerec.models  # noqa: F401 -- register all tables
+from gamerec.api.users import get_sync_coordinator
+from gamerec.core.auth_security import token_hash
+from gamerec.core.config import settings
 from gamerec.db import Base, get_db
 from gamerec.main import app
+from gamerec.models import AuthSession, User
+from gamerec.services.manual_library_sync import LibrarySyncCoordinator
 
 
 @pytest_asyncio.fixture
@@ -63,3 +70,45 @@ async def pg_client(pg_sessions, monkeypatch):
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
         yield client
+
+
+@pytest.fixture
+def authenticate_pg_client(pg_sessions, pg_client, monkeypatch):
+    """Opt-in real session for an already-seeded synthetic user; no auth bypass."""
+    for name, value in {
+        "auth_enabled": True,
+        "auth_public_base_url": "http://localhost:5173/api",
+        "auth_frontend_origin": "http://localhost:5173",
+        "auth_cookie_secure": False,
+        "auth_session_cookie_name": "gamerec_session",
+    }.items():
+        monkeypatch.setattr(settings, name, value)
+    coordinator = LibrarySyncCoordinator()
+
+    async def current_coordinator():
+        return coordinator
+
+    monkeypatch.setitem(
+        app.dependency_overrides, get_sync_coordinator, current_coordinator
+    )
+
+    async def authenticate(identity: str, *, expires_at=None):
+        raw = secrets.token_urlsafe(32)
+        now = datetime.now(UTC)
+        async with pg_sessions() as db:
+            assert await db.get(User, identity) is not None
+            db.add(
+                AuthSession(
+                    token_hash=token_hash(raw),
+                    steamid64=identity,
+                    created_at=now,
+                    expires_at=expires_at or now + timedelta(hours=1),
+                )
+            )
+            await db.commit()
+        pg_client.cookies.clear()
+        pg_client.cookies.set("gamerec_session", raw)
+        pg_client.headers["Origin"] = "http://localhost:5173"
+        return raw
+
+    return authenticate

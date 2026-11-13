@@ -42,7 +42,7 @@ export function LibraryGameRow({
             </div>
           )}
         </dl>
-        {import.meta.env.DEV && preferencesAllowed ? (
+        {preferencesAllowed ? (
           <GamePreferenceControls
             key={`${steamId}:${game.steam_app_id}`}
             steamId={steamId}

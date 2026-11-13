@@ -11,7 +11,6 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 
-from gamerec.core.config import settings
 from gamerec.models import Game, User, UserGame
 from gamerec.services import manual_library_sync as sync
 
@@ -31,9 +30,6 @@ def game(appid=10, playtime=60):
 
 @pytest.fixture
 def pipeline(monkeypatch):
-    monkeypatch.setattr(settings, "environment", "development")
-    monkeypatch.setattr(settings, "manual_library_sync_enabled", True)
-    monkeypatch.setattr(settings, "steamid64_test", USER)
     monkeypatch.setattr(
         sync.httpx,
         "AsyncClient",
@@ -76,7 +72,7 @@ async def snapshot(sessions):
         ]
 
 
-async def test_unknown_allowed_account_repeat_updates_new_games_and_empty_preservation(
+async def test_new_account_repeat_updates_new_games_and_empty_preservation(
     pg_sessions, pipeline
 ):
     result = await run_sync(pg_sessions)

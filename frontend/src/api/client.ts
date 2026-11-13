@@ -1,4 +1,5 @@
 import type {
+  CurrentUser,
   GamePreference,
   GamePreferenceResponse,
   LibraryOptions,
@@ -24,11 +25,12 @@ export class ApiError extends Error {
 }
 
 const baseUrl = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '')
+export const steamLoginUrl = `${baseUrl}/auth/steam/login`
 
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(`${baseUrl}${path}`, init)
+    response = await fetch(`${baseUrl}${path}`, { ...init, credentials: 'include' })
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error
     throw new ApiError(0)
@@ -62,6 +64,23 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   }
 }
 
+export async function getCurrentUser(signal?: AbortSignal): Promise<CurrentUser | null> {
+  try {
+    const user = await request<CurrentUser>('/auth/me', { signal })
+    if (typeof user?.steamid64 !== 'string' || !/^[0-9]{17}$/.test(user.steamid64)) {
+      throw new ApiError(502)
+    }
+    return user
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null
+    throw error
+  }
+}
+
+export function logout(): Promise<void> {
+  return request<void>('/auth/logout', { method: 'POST' })
+}
+
 export function updateGamePreference(
   steamId: string,
   appId: number,
@@ -79,7 +98,10 @@ export function updateGamePreference(
 
 export function preferenceErrorMessage(error: unknown): string {
   const status = error instanceof ApiError ? error.status : 0
-  if (status === 403) return 'Preference editing is not permitted for this account or environment.'
+  if (status === 401) return 'Your session has ended. Sign in with Steam to save preferences.'
+  if (error instanceof ApiError && error.code === 'csrf_failed')
+    return 'The request origin could not be verified. Refresh this page before retrying.'
+  if (status === 403) return 'This preference can only be changed by its signed-in owner.'
   if (status === 404) return 'This game or stored library is no longer available for rating.'
   if (status === 422) return 'The preference could not be saved. Reload the library and try again.'
   if (status === 503)
@@ -148,8 +170,11 @@ export async function syncSteamLibrary(
 export function librarySyncErrorMessage(error: unknown): string {
   const status = error instanceof ApiError ? error.status : 0
   const code = error instanceof ApiError ? error.code : undefined
-  if (code === 'sync_forbidden' || status === 403)
-    return 'Library sync is not permitted for this account or environment.'
+  if (status === 401) return 'Your session has ended. Sign in with Steam to sync your library.'
+  if (code === 'csrf_failed')
+    return 'The request origin could not be verified. Refresh this page before retrying.'
+  if (code === 'account_forbidden' || status === 403)
+    return 'Only the signed-in owner can sync this library.'
   if (code === 'sync_in_progress' || status === 409)
     return 'A library sync is already running for this account. Refresh stored data before trying again.'
   if (code === 'sync_cooldown' || status === 429) {
@@ -175,10 +200,14 @@ export function errorMessage(
   kind: 'search' | 'explanation' | 'recommendation' | 'library',
 ): string {
   const status = error instanceof ApiError ? error.status : 0
+  if ((kind === 'library' || kind === 'recommendation') && status === 401)
+    return 'Your session has ended. Sign in with Steam to continue.'
+  if ((kind === 'library' || kind === 'recommendation') && status === 403)
+    return 'This data is only available to its signed-in owner. Refresh your session and try again.'
   if (kind === 'library') {
     if (status === 404)
-      return 'No previously imported library was found for this Steam ID. You can enter another ID above.'
-    if (status === 422) return 'Check the Steam ID and library page, then try again.'
+      return 'Your stored library could not be found. Refresh your session and try again.'
+    if (status === 422) return 'The library page could not be loaded. Return to the first page and try again.'
     if (status === 0) return 'Could not connect. Check your connection and try again.'
     return 'The stored library is temporarily unavailable. Please try again shortly.'
   }

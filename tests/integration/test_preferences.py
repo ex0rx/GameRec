@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 
+from gamerec.core.config import settings
 from gamerec.models.game import Game
 from gamerec.models.user import User
 from gamerec.models.user_game import UserGame
@@ -13,16 +14,31 @@ from gamerec.models.user_game_preference import UserGamePreference
 from gamerec.services.steam_library import save_steam_library
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration]
-USER_A = "synthetic-preferences-a"
-USER_B = "synthetic-preferences-b"
+USER_A = "76561190000000001"
+USER_B = "76561190000000002"
+MISSING = "76561190000000003"
 OLD_TIMESTAMP = datetime(2000, 1, 1, tzinfo=UTC)
 
 
-async def seed_catalogue(pg_sessions, *, users=(USER_A,), app_ids=(10,)):
+@pytest.fixture(autouse=True)
+def allowed_writes(monkeypatch):
+    monkeypatch.setattr(settings, "environment", "development")
+    monkeypatch.setattr(settings, "user_preference_writes_enabled", True)
+    monkeypatch.setattr(settings, "steamid64_test", USER_A)
+
+
+async def seed_catalogue(pg_sessions, *, users=(USER_A,), app_ids=(10,), owned=True):
     async with pg_sessions() as db:
         db.add_all(User(steamid64=user) for user in users)
         db.add_all(Game(steam_app_id=appid, name=f"Game {appid}") for appid in app_ids)
         await db.commit()
+        if owned:
+            db.add_all(
+                UserGame(steamid64=user, steam_app_id=appid)
+                for user in users
+                for appid in app_ids
+            )
+            await db.commit()
 
 
 async def test_put_creates_then_updates_one_persisted_preference(
@@ -97,9 +113,10 @@ async def test_invalid_preference_returns_422_without_changing_state(
 
 
 @pytest.mark.parametrize("method", ["put", "get", "delete"])
-async def test_unknown_user_returns_404(pg_client, pg_sessions, method):
+async def test_unknown_user_returns_404(pg_client, pg_sessions, monkeypatch, method):
     await seed_catalogue(pg_sessions)
-    url = "/users/synthetic-missing/preferences"
+    monkeypatch.setattr(settings, "steamid64_test", MISSING)
+    url = f"/users/{MISSING}/preferences"
     kwargs = {}
     if method != "get":
         url += "/10"
@@ -107,11 +124,12 @@ async def test_unknown_user_returns_404(pg_client, pg_sessions, method):
         kwargs["json"] = {"preference": "liked"}
     response = await pg_client.request(method, url, **kwargs)
     assert response.status_code == 404
-    assert response.json() == {
-        "detail": "User with steamid64 synthetic-missing not found"
-    }
+    if method == "get":
+        assert response.json() == {"detail": f"User with steamid64 {MISSING} not found"}
+    else:
+        assert response.json()["detail"]["code"] == "user_not_found"
     async with pg_sessions() as db:
-        assert await db.get(User, "synthetic-missing") is None
+        assert await db.get(User, MISSING) is None
         assert (
             await db.scalar(select(func.count()).select_from(UserGamePreference)) == 0
         )
@@ -125,7 +143,7 @@ async def test_unknown_game_returns_404(pg_client, pg_sessions, method):
         method, f"/users/{USER_A}/preferences/999", **kwargs
     )
     assert response.status_code == 404
-    assert response.json() == {"detail": "Game with steam_app_id 999 not found"}
+    assert response.json()["detail"]["code"] == "game_not_found"
     async with pg_sessions() as db:
         assert (
             await db.scalar(select(func.count()).select_from(UserGamePreference)) == 0
@@ -238,7 +256,7 @@ async def test_database_rejects_duplicate_composite_key(pg_client, pg_sessions):
 
 
 async def test_preferences_do_not_change_ownership_or_playtime(pg_client, pg_sessions):
-    await seed_catalogue(pg_sessions, app_ids=(10, 20))
+    await seed_catalogue(pg_sessions, app_ids=(10, 20), owned=False)
     async with pg_sessions() as db:
         db.add(
             UserGame(
@@ -252,8 +270,8 @@ async def test_preferences_do_not_change_ownership_or_playtime(pg_client, pg_ses
         user.library_last_synced_at = OLD_TIMESTAMP
         await db.commit()
 
-    # A preference is allowed even for a catalogue game the user does not own.
-    for appid in (10, 20):
+    # Only owned games accept new ratings; ownership and playtime stay unchanged.
+    for appid in (10,):
         for value in ("liked", "disliked", "neutral"):
             response = await pg_client.put(
                 f"/users/{USER_A}/preferences/{appid}", json={"preference": value}
@@ -288,7 +306,7 @@ async def test_preferences_do_not_change_ownership_or_playtime(pg_client, pg_ses
 
 
 async def test_library_resync_preserves_explicit_preferences(pg_client, pg_sessions):
-    await seed_catalogue(pg_sessions, app_ids=(10, 20))
+    await seed_catalogue(pg_sessions, app_ids=(10, 20), owned=False)
     async with pg_sessions() as db:
         await save_steam_library(
             db,
@@ -301,7 +319,7 @@ async def test_library_resync_preserves_explicit_preferences(pg_client, pg_sessi
                 }
             ],
         )
-    for appid, value in ((10, "disliked"), (20, "liked")):
+    for appid, value in ((10, "disliked"),):
         response = await pg_client.put(
             f"/users/{USER_A}/preferences/{appid}", json={"preference": value}
         )
@@ -333,3 +351,72 @@ async def test_library_resync_preserves_explicit_preferences(pg_client, pg_sessi
             )
             for row in owned
         ] == [(10, 120, 15)]
+
+
+async def test_unowned_put_is_rejected_but_legacy_record_remains_readable_and_clearable(
+    pg_client, pg_sessions
+):
+    await seed_catalogue(pg_sessions, owned=False)
+    url = f"/users/{USER_A}/preferences/10"
+    rejected = await pg_client.put(url, json={"preference": "liked"})
+    assert rejected.status_code == 404
+    assert rejected.json()["detail"]["code"] == "game_not_owned"
+    async with pg_sessions() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(UserGamePreference)) == 0
+        )
+        db.add(
+            UserGamePreference(steamid64=USER_A, steam_app_id=10, preference="neutral")
+        )
+        await db.commit()
+    listed = await pg_client.get(f"/users/{USER_A}/preferences")
+    assert [row["preference"] for row in listed.json()] == ["neutral"]
+    assert (await pg_client.delete(url)).status_code == 204
+    assert (await pg_client.delete(url)).status_code == 204
+    async with pg_sessions() as db:
+        assert (
+            await db.scalar(select(func.count()).select_from(UserGamePreference)) == 0
+        )
+        assert await db.scalar(select(func.count()).select_from(UserGame)) == 0
+
+
+async def test_library_join_scopes_preferences_and_has_no_per_game_queries(pg_sessions):
+    from sqlalchemy import event
+
+    from gamerec.services.user_library import get_user_library
+
+    await seed_catalogue(pg_sessions, users=(USER_A, USER_B), app_ids=(10, 20, 30))
+    async with pg_sessions() as db:
+        db.add_all(
+            [
+                UserGamePreference(
+                    steamid64=USER_A, steam_app_id=10, preference="liked"
+                ),
+                UserGamePreference(
+                    steamid64=USER_A, steam_app_id=20, preference="neutral"
+                ),
+                UserGamePreference(
+                    steamid64=USER_B, steam_app_id=10, preference="disliked"
+                ),
+            ]
+        )
+        await db.commit()
+    statements = []
+    async with pg_sessions() as db:
+        connection = await db.connection()
+        engine = connection.sync_connection.engine
+
+        def record(_conn, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            result = await get_user_library(db, USER_A)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+    assert [(row["steam_app_id"], row["preference"]) for row in result["games"]] == [
+        (10, "liked"),
+        (20, "neutral"),
+        (30, None),
+    ]
+    assert len(statements) == 3

@@ -66,6 +66,16 @@ export interface LibraryGame {
   name: string
   playtime_forever_minutes: number | null
   playtime_2weeks_minutes: number | null
+  preference: GamePreference | null
+}
+
+export type GamePreference = 'liked' | 'disliked' | 'neutral'
+
+export interface GamePreferenceResponse {
+  steamid64: string
+  steam_app_id: number
+  preference: GamePreference
+  preference_last_updated_at: string
 }
 
 export interface LibraryResponse {
@@ -74,5 +84,16 @@ export interface LibraryResponse {
   limit: number
   offset: number
   library_last_synced_at: string | null
+  sync_allowed: boolean
+  preference_writes_allowed: boolean
   games: LibraryGame[]
+}
+
+export interface LibrarySyncResponse {
+  steamid64: string
+  status: 'completed'
+  processed_games: number
+  total_games: number
+  library_last_synced_at: string
+  metadata_enrichment: 'complete' | 'partial'
 }

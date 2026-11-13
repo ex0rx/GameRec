@@ -7,6 +7,7 @@ import { ErrorState } from '../../components/States'
 import { GameDetailsDrawer } from '../../components/GameDetailsDrawer'
 import { LibraryForm } from './LibraryForm'
 import { LibraryGameRow } from './LibraryGameRow'
+import { LibrarySyncAction } from './LibrarySyncAction'
 import { useSteamLibrary } from './useSteamLibrary'
 import {
   LIBRARY_PAGE_SIZE,
@@ -45,6 +46,8 @@ function LibraryGames({ data }: { data: LibraryResponse }) {
           <LibraryGameRow
             key={game.steam_app_id}
             game={game}
+            steamId={data.steamid64}
+            preferencesAllowed={data.preference_writes_allowed}
             onInspect={(trigger) => setSelection({ game, trigger })}
           />
         ))}
@@ -79,7 +82,7 @@ export function LibraryPage() {
   const navigate = useNavigate()
   const valid = validLibrarySteamId(steamId)
   const query = useSteamLibrary(steamId, LIBRARY_PAGE_SIZE, (page - 1) * LIBRARY_PAGE_SIZE)
-  const data = query.isSuccess && !query.isFetching ? query.data : undefined
+  const data = query.data
   const unknown = query.error instanceof ApiError && query.error.status === 404
 
   return (
@@ -133,9 +136,9 @@ export function LibraryPage() {
                 </Link>
               )}
             </div>
-            {query.isFetching || query.isPending ? (
+            {!data && (query.isFetching || query.isPending) ? (
               <LibrarySkeleton />
-            ) : query.isError ? (
+            ) : !data && query.isError ? (
               <ErrorState
                 title={unknown ? 'No stored library found' : 'Library couldn’t be loaded'}
                 message={errorMessage(query.error, 'library')}
@@ -146,6 +149,38 @@ export function LibraryPage() {
             ) : (
               data && (
                 <>
+                  {import.meta.env.DEV && data.sync_allowed && (
+                    <LibrarySyncAction
+                      key={steamId}
+                      steamId={steamId}
+                      isRefreshing={query.isFetching}
+                      onRefresh={() => {
+                        void query.refetch({ cancelRefetch: false })
+                      }}
+                    />
+                  )}
+                  {query.isError && (
+                    <div className="library-refresh-warning" role="alert">
+                      <p>
+                        The displayed snapshot could not be refreshed. Refresh stored data before
+                        making more changes.
+                      </p>
+                      <button
+                        className="button secondary"
+                        disabled={query.isFetching}
+                        onClick={() => {
+                          void query.refetch({ cancelRefetch: false })
+                        }}
+                      >
+                        Refresh stored library
+                      </button>
+                    </div>
+                  )}
+                  {query.isFetching && (
+                    <p className="library-recorded-note" role="status">
+                      Refreshing stored library…
+                    </p>
+                  )}
                   <div className="library-overview">
                     <span>
                       {data.total_games} {data.total_games === 1 ? 'stored game' : 'stored games'}

@@ -15,6 +15,7 @@ from gamerec.services.user_profile import (
     PREFERENCE_WEIGHTS,
     UNRATED_WEIGHT,
     UserGameProfile,
+    apply_explicit_playtime_floor,
     fetch_game_vectors,
 )
 
@@ -111,7 +112,9 @@ def select_representative_seed_games(
     return sorted(
         eligible,
         key=lambda game: (
-            -log1p(max(0, game.playtime_minutes or 0))
+            -apply_explicit_playtime_floor(
+                log1p(max(0, game.playtime_minutes or 0)), game.preference
+            )
             * PREFERENCE_WEIGHTS.get(game.preference, UNRATED_WEIGHT),
             -PREFERENCE_WEIGHTS.get(game.preference, UNRATED_WEIGHT),
             game.steam_app_id,
@@ -207,7 +210,9 @@ async def get_multi_source_recommendation_candidates(
     merged = merge_candidate_ids(profile_candidates, seed_candidates)
     unowned = filter_owned_games(merged, owned_ids)
     vectors = (
-        await fetch_game_vectors(db, [candidate["steam_app_id"] for candidate in unowned])
+        await fetch_game_vectors(
+            db, [candidate["steam_app_id"] for candidate in unowned]
+        )
         if unowned
         else None
     ) or {}

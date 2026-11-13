@@ -14,10 +14,14 @@ from gamerec.api.users import router as users_router
 from gamerec.core.config import settings
 from gamerec.integrations.redis import create_redis_client
 from gamerec.services.explanation_cache import ExplanationCache
+from gamerec.services.manual_library_sync import LibrarySyncCoordinator
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    app.state.library_sync_coordinator = LibrarySyncCoordinator(
+        settings.manual_library_sync_cooldown_seconds
+    )
     client = create_redis_client() if settings.explanation_cache_enabled else None
     app.state.explanation_cache = (
         ExplanationCache(
@@ -31,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        app.state.library_sync_coordinator = None
         app.state.explanation_cache = None
         if client is not None:
             try:

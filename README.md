@@ -387,6 +387,378 @@ remain outside this phase. Artwork is best effort. No relevance-quality claim is
 made. The existing API exposes libraries by supplied ID without ownership checks;
 this is a local prototype, not an authenticated multi-user deployment.
 
+## Manual Steam library synchronisation — Frontend Phase 5
+
+**Sync Library** is a development-only, explicitly requested refresh of the one
+configured test account. Enable it in the backend's local `.env`:
+
+```dotenv
+ENVIRONMENT=development
+MANUAL_LIBRARY_SYNC_ENABLED=true
+# Set STEAMID64_TEST privately to the consenting account's 17-digit Steam ID.
+MANUAL_LIBRARY_SYNC_COOLDOWN_SECONDS=60
+```
+
+Recreate the API to load changed settings:
+
+```bash
+docker compose up -d --no-deps api
+```
+
+Enablement defaults to false. The server requires all three checks: development
+environment, enabled flag and exact match to a valid configured `STEAMID64_TEST`.
+Missing/invalid configuration fails closed. `GET /users/{steamid64}/library` adds
+`sync_allowed`; the control appears only in Vite development mode when that value
+is true. A production build omits the action even when a server permits it.
+This is a local development restriction, not authentication or ownership proof.
+Steam must make the account's game details visible to the API; unavailable data
+is not an empty library. See the [official GetOwnedGames documentation](https://partner.steamgames.com/doc/webapi/IPlayerService#GetOwnedGames).
+
+### Sync contract and behaviour
+
+`POST /users/{steamid64}/library/sync` accepts an exact 17-ASCII-digit string path
+identifier and no request body. It may create the permitted user if not yet stored.
+The page exposes the action after an existing library has loaded. A completed
+response contains:
+
+```json
+{
+  "steamid64": "<configured account ID>",
+  "status": "completed",
+  "processed_games": 65,
+  "total_games": 65,
+  "library_last_synced_at": "2026-11-13T00:00:00Z",
+  "metadata_enrichment": "partial"
+}
+```
+
+The numbers/time above illustrate the schema. `processed_games` counts returned
+ownership entries; `total_games` is the actual stored count. Imports atomically
+upsert ownership/playtime, create needed catalogue stubs and update the successful
+sync timestamp. They retain existing rows absent from a later response, including
+valid empty responses. Fetch/validation failures do not change ownership or the
+successful timestamp. CLI import behaviour is unchanged.
+
+Core import has a 120-second budget. After its commit, metadata enrichment gets
+30 seconds, at most 10 returned library games, batch size 10 and HTTP concurrency
+2, with existing pacing/retries. `partial` means work remains or was interrupted;
+it never undoes a completed ownership import. `complete` means no returned game
+remains awaiting a metadata sync, including terminal unavailable Store responses;
+it does not guarantee every descriptive field is available. No catalogue-wide
+work or embedding regeneration runs. New games can remain unindexed until the
+existing embedding workflow is run separately.
+
+Errors use `detail: {"code": "...", "message": "..."}`:
+
+| HTTP | Code | Meaning |
+|---|---|---|
+| 422 | FastAPI validation detail | Invalid path ID |
+| 403 | `sync_forbidden` | Disabled, wrong environment or disallowed account |
+| 409 | `sync_in_progress` | Same-account import is running |
+| 429 | `sync_cooldown` | Wait for `Retry-After` seconds |
+| 503 | `steam_unavailable` | Owned-game data unavailable/private |
+| 502 | `steam_upstream_error` | Failed/unusable Steam response |
+| 504 | `sync_timeout` | Timeout; refresh stored data before retrying |
+| 503 | `database_unavailable` | Storage unavailable; refresh before retrying |
+
+Accepted attempts start a configurable 60-second cooldown before contacting
+Steam, including failures. Rejections do not extend it. A recent persisted
+successful-sync timestamp also protects against immediate repeat imports; longer
+Steam `Retry-After` delays extend protection. Concurrent requests are rejected
+immediately. Coordination and failed-attempt cooldowns are in process: they do
+not survive API restarts or coordinate workers. **Use one local API worker.**
+
+The typed `syncSteamLibrary` / `useSyncSteamLibrary` mutation has no automatic
+retries or optimistic ownership updates. Its client timeout is 180 seconds; the
+Vite proxy remains 200 seconds. Pending state survives navigating away/back.
+Confirmed completion invalidates all library pages and recommendation queries
+for the original account only; active data refetches and inactive data becomes
+stale. Stored rows remain visible during sync/background refresh, and a failed
+refresh offers a read-only retry. Timeout/lost-response messages advise reading
+stored data first because the import might already have committed.
+
+### Local verification
+
+The ordinary `--library` verification remains read-only. This separate mode
+**performs one real import** of the configured account and checks immediate
+cooldown, persisted count/playtime/timestamp, and masked desktop/mobile layouts:
+
+```bash
+python3 frontend/scripts/verify_recommendations.py --library-sync
+```
+
+Live traces/video/automatic screenshots are off. Explicit screenshots mask
+identity fields; diagnostics are redacted. Only status/count evidence is saved
+under ignored `frontend/live-results/library-sync/`. Do not publish personal IDs
+or raw library URLs. Mocked tests and isolated PostgreSQL tests are separate from
+this live evidence. CI remains intentionally removed; verification is local.
+
+Verification on **13 November 2026**:
+
+- **369 focused Python tests passed**, including 35 new manual-sync tests and
+  nine launcher privacy tests. **24 isolated PostgreSQL tests passed**, including
+  eight new orchestration cases. No automated persistence test used development
+  data. The disposable PostgreSQL test server was removed after verification.
+- **84 mocked browser tests passed** (14 new sync checks); the 14 sync cases were
+  rerun after fixture cleanup. A separate built production-preview check passed.
+  TypeScript, ESLint, production build, repository Ruff and affected-file
+  formatting checks passed.
+- One real sync returned **200**, processed/stored **68 games** (previous stored
+  count: 65), and reported metadata enrichment **complete**. The persisted sync
+  timestamp matched the response and advanced; all returned playtime values were
+  checked. An immediate second POST returned **429 / Retry-After: 60** before
+  another Steam fetch.
+- After cooldown, a temporary closed outbound HTTP proxy produced **502 /
+  steam_upstream_error**. The complete ownership/playtime snapshot and successful
+  timestamp were unchanged. A further attempt returned **429**, proving failed
+  attempts retain cooldown. Normal API configuration was restored; the temporary
+  sync flag is disabled. No second successful live import was needed.
+- Masked desktop/mobile success and mocked partial-enrichment screenshots were
+  visually reviewed. Redacted live evidence is under
+  `frontend/live-results/library-sync/`; mocked evidence is under
+  `frontend/test-results/`. No quality/relevance ratings were fabricated.
+
+Focused backend commands (run from the repository root):
+
+```bash
+uv run pytest -q tests/test_manual_library_sync.py tests/test_user_library_api.py tests/test_verify_recommendations_frontend.py
+# Requires TEST_POSTGRES_ADMIN_URL pointing to a dedicated /gamerec_test_admin DB.
+uv run pytest -q --run-integration tests/integration/test_manual_library_sync.py tests/integration/test_library_sync.py tests/integration/test_library_api.py
+```
+
+The existing browser command runs all mocked regressions. To repeat the production
+visibility guard, start `npm run preview -- --port 5174` in the frontend container
+(after building), then use the same matched Playwright container command above
+with `npm run test:production` in place of `npm test`. Stop preview afterwards.
+
+## User preferences and recommendation feedback
+
+### Pipeline inspection before this change
+
+The existing `user_game_preferences` table stores one row per account/game,
+including `liked`, `disliked` and legacy `neutral`. Clearing a row restores
+unrated behaviour. Existing PUT/DELETE endpoints persist these values, but
+previously lacked a write allowlist and allowed ratings for unowned catalogue
+games. Library responses did not expose preferences and the UI had no controls.
+
+The current personalised pipeline already reads owned-game preferences when
+constructing the profile, selecting retrieval seeds and calculating genre/category
+affinity. It uses liked **1.0**, disliked **−0.6**, neutral **0.4**, and unrated
+**0.5**. With at least three valid embedded games played for 300 minutes each,
+profile coefficients multiply these values by logarithmic playtime; otherwise
+existing preference-only/unweighted fallbacks apply. The summed vector is L2
+normalised. Disliked games are excluded from positive seed selection.
+
+Affinity uses signed preference weights and capped logarithmic playtime, with
+signed genre TF–IDF and category frequencies. Final weights are **0.30 similarity,
+0.30 popularity, 0.10 review quality, 0.25 affinity and 0.05 recency**. Optional
+MMR is disabled by the HTTP orchestration. Recommendations have no backend result
+cache; the frontend uses TanStack Query. Redis caches search explanations only.
+
+The specific defect found was that sufficient-history profile weighting and
+playtime affinity discarded explicit feedback at zero playtime. This phase fixes
+that boundary while preserving the existing preference and hybrid multipliers.
+
+### Enable preference editing
+
+Set these in the private backend `.env`, using the existing consenting test
+account (never commit its ID):
+
+```dotenv
+ENVIRONMENT=development
+USER_PREFERENCE_WRITES_ENABLED=true
+# STEAMID64_TEST must already contain the exact permitted 17-digit account ID.
+```
+
+```bash
+docker compose up -d --no-deps api
+```
+
+Refresh the development Library page and load that account. Like and Dislike
+buttons appear only when `import.meta.env.DEV` and the response's
+`preference_writes_allowed` are true. Steam synchronisation does not need to be
+enabled. Other libraries and production builds show read-only preference labels.
+These local restrictions do not authenticate an account owner.
+
+### Saved preference contract and UI
+
+- `PUT /users/{steamid64}/preferences/{steam_app_id}` accepts
+  `{"preference":"liked"}` or `"disliked"`; legacy `"neutral"` remains accepted.
+  The existing response contains identity, preference and update timestamp.
+- `DELETE` at the same URL returns **204** and removes the row, restoring unrated
+  behaviour. It is idempotent. `null` is a Library response state, not a PUT value.
+- New/updated ratings require stored ownership. Existing unowned legacy records
+  remain readable through GET preferences and clearable through DELETE.
+- Write IDs must be exactly 17 ASCII digits. Disallowed writes return **403**
+  (`preference_forbidden`); unknown user/game or unowned PUT target returns **404**
+  (`user_not_found`, `game_not_found`, `game_not_owned`); invalid inputs **422**;
+  unavailable storage **503** (`database_unavailable`). Errors do not expose SQL
+  parameters or raw account IDs.
+- Library games now contain `preference: "liked" | "disliked" | "neutral" | null`.
+  A user-scoped outer join loads this with the existing paginated query, without
+  per-game requests. Stored preferences survive syncs; writes do not alter
+  ownership, playtime, sync timestamps, game metadata or embeddings.
+
+Clicking a selected Like/Dislike clears it; the opposite action switches it.
+Buttons expose `aria-pressed`, keyboard focus and text states. Legacy neutral
+ratings retain their weight and show **Neutral (legacy)** with an explicit Clear
+control. No new Neutral button is introduced.
+
+The typed `updateGamePreference` client and `useUpdateGamePreference` hook use
+per-account/game mutation keys. Pending writes survive navigation and reject
+conflicting clicks. The previous confirmed state stays visible while saving;
+failed/uncertain writes offer read-only reload and explicit retry, with no
+optimistic changes or automatic retries. Success cancels obsolete account-scoped
+reads, patches only confirmed cached rows, and invalidates that account's Library
+pages and recommendation limits. Active queries refetch; inactive ones become
+stale. This does not automatically generate recommendations from Library or call
+Steam, Ollama or Qdrant writes. The existing View recommendations action retrieves
+fresh results through the backend and preserves their ordering.
+
+### Actual preference mathematics
+
+Let `t_i = max(0, lifetime minutes)` and let `b_i` be the existing preference
+multiplier: liked 1.0, disliked -0.6, neutral 0.4, unrated 0.5. The shared
+`apply_explicit_playtime_floor` applies:
+
+```text
+a_i = max(1, ln(1 + t_i))   for liked/disliked
+      ln(1 + t_i)           otherwise
+```
+
+`construct_profile_vector` first discards invalid/non-finite/zero-norm vectors.
+With sufficient play history, it computes `w_i = b_i * a_i / sum(a)` and returns
+`L2_normalise(sum(w_i * game_vector_i))`. The common denominator cancels under
+final normalisation. Thus liking an otherwise equal game doubles its coefficient
+relative to unrated; disliking reverses the sign, from +0.5 to -0.6. A 200-hour
+dislike has coefficient proportional to `-0.6 * ln(12001)`, not a large positive
+playtime signal. A five-hour like has positive strength `ln(301)`. Zero/unknown
+playtime explicit feedback now has base strength +1.0 or -0.6; the floor also
+covers very small playtimes below that logarithmic strength.
+
+With insufficient play history, existing fallbacks remain: if any valid explicit
+preference exists, use preference multipliers alone; otherwise use uniform
+library weights. Only-dislike/non-positive or numerically cancelled profiles
+return no usable profile, producing the existing successful empty recommendation
+response. This does not establish an empty library.
+
+`select_representative_seed_games` excludes dislikes, orders eligible games by
+signed preference strength times the floored logarithmic playtime, then preference
+strength and app ID. Liked unplayed games remain eligible. Qdrant retrieves profile
+and seed candidates; owned games are removed and current PostgreSQL vectors
+recompute each candidate's cosine similarity to the preference-adjusted profile.
+
+`build_user_affinity_profile` caps positive logarithmic playtimes at their existing
+90th percentile, then applies the same explicit-feedback floor before multiplying
+by `b_i`. Signed contributions accumulate by gameplay genre/category. Genre TF is
+`sign(f) * ln(1 + abs(f))`, with smoothed IDF
+`ln((catalogue_size + 1)/(genre_count + 1)) + 1`; generic Free To Play/Early Access
+labels are excluded. Genre and category maps are separately normalised by maximum
+absolute score. Candidate affinity is **0.7 × mean genre affinity + 0.3 × mean
+category affinity**. Likes/dislikes can reinforce or cancel shared features;
+legacy neutral and unrated zero-playtime behaviour remains unchanged.
+
+The existing `rank_candidates` formula remains:
+
+```text
+hybrid = 0.30 * similarity + 0.30 * popularity + 0.10 * Wilson review quality
+       + 0.25 * affinity   + 0.05 * release recency
+```
+
+Preferences affect profile/seed retrieval, recomputed semantic similarity and
+signed affinity. Popularity (log review count), Wilson quality and release recency
+remain independent. No additional dislike penalty is added; semantic and affinity
+feedback retain their existing roles. Optional MMR remains disabled. Preferences
+cannot guarantee a particular top-20 move: candidate coverage, shared metadata,
+500-review eligibility, popularity and the other components still matter. Missing
+current embeddings prevent vector feedback; genre/category feedback can still
+matter if other owned games provide a usable profile and metadata is available.
+
+### Preference verification
+
+The explicit live mode temporarily rates two originally unrated, embedded owned
+games, compares actual HTTP recommendations and profile/affinity signals, and
+clears both test preferences in browser-independent host cleanup:
+
+```bash
+python3 frontend/scripts/verify_recommendations.py --preferences
+```
+
+Run it only after enabling development preference writes. It does not sync Steam,
+update metadata or regenerate embeddings. Traces, video and automatic screenshots
+are disabled; explicit screenshots mask identity fields. Redacted comparisons,
+masked images and a protected restoration journal are saved under ignored
+`frontend/live-results/preferences/`. An unresolved recovery journal blocks another
+run. If restoration fails, use its listed public app IDs to clear only the test
+records for the same configured account, then verify their absence. Do not delete
+an unresolved recovery journal or publish personal IDs/raw library URLs.
+
+Automated persistence tests use UUID-isolated PostgreSQL databases. Unit tests mock
+external dependencies; the persisted recommendation test uses the actual profile,
+affinity and ranking functions with mocked Qdrant retrieval. Existing search,
+explanations, Library sync and recommendation behaviour remain regression gates.
+CI remains intentionally removed; verification is local. No new tables, migrations,
+models, ranking sliders, infrastructure or authentication are introduced.
+
+Local verification on **13 November 2026**:
+
+- **454 focused Python tests passed**, including 51 new preference API/math
+  cases and 22 launcher/tooling checks. **47 isolated PostgreSQL tests passed**,
+  covering persistence, Library sync and the actual recommendation pipeline with
+  mocked Qdrant. The disposable test server was removed afterwards.
+- **98 mocked browser tests passed**, including 14 preference checks, plus one
+  separate production-preview guard. TypeScript, ESLint, production build,
+  repository Ruff and affected-file formatting checks passed. Production hides
+  write controls even when a mocked API advertises both capabilities.
+- Four real browser stages (baseline, like, like + dislike, restored) each
+  returned **HTTP 200 / 20 recommendations** through the Vite proxy and existing
+  typed client/hook. The catalogue guards and successful-sync timestamp stayed
+  unchanged. No Steam import, metadata update or model inference was requested.
+- Liking **Monster Hunter: World** changed its signed pre-normalisation profile
+  coefficient from **0.013429054 to 0.026858107**. Disliking **Terraria**, despite
+  **42,081 recorded minutes**, changed its coefficient from **+0.014176065 to
+  −0.017011278**. Both originally absent test records were deleted afterwards.
+
+One observed returned recommendation:
+
+| MONSTER HUNTER RISE | Rank | Similarity | Affinity | Hybrid score |
+|---|---:|---:|---:|---:|
+| Baseline | 10 | 0.644165 | 0.836353 | 0.744478 |
+| After like | 10 | 0.657939 | 0.840326 | 0.749603 |
+| After like + dislike | 8 | 0.663065 | 0.855017 | 0.754814 |
+| Restored | 10 | 0.644165 | 0.836353 | 0.744478 |
+
+The like alone changed scores without moving this game's rank. The two signals
+changed the final ordering; this does **not** establish improved relevance.
+Terraria's cosine to the whole profile remained positive (0.717995 → 0.662927)
+because other library vectors share characteristics; its own coefficient was
+negative. Popularity, Wilson quality and recency were unchanged for common
+returned games. Clearing both test ratings restored the profile and affinity
+fingerprints and **all original top-20 IDs, positions and score components exactly**.
+
+The complete four-stage top-20 exports, signed signals, configuration and
+comparison are in the local ignored `frontend/live-results/preferences/comparison.json`
+and `report.md`; `recovery.json` confirms restoration. Masked real liked/disliked
+and mocked all-state desktop/mobile screenshots were visually reviewed.
+The API returned to its normal configuration: preference writes default to off;
+the user's existing manual-sync setting was preserved. Use the enablement section
+above to show the preference controls.
+
+Focused commands, alongside the existing frontend checks/browser command:
+
+```bash
+uv run pytest -q tests/test_preferences_api.py tests/test_preference_feedback.py tests/test_verify_recommendations_frontend.py
+# Only with TEST_POSTGRES_ADMIN_URL set to a dedicated /gamerec_test_admin DB:
+uv run pytest -q --run-integration tests/integration/test_preferences.py tests/integration/test_preference_recommendations.py tests/integration/test_library_api.py
+```
+
+Limitations: one configured development account, unauthenticated read-only browsing,
+limited indexed catalogue/metadata and no promise that one rating changes a specific
+rank. Only-dislike histories still return no usable positive recommendation profile.
+No manual relevance or explanation-quality labels were added. The shared floor is
+proved with deterministic zero-playtime fixtures; the live chosen games had nonzero
+playtime. Existing best-effort artwork limitations remain.
+
 ## Natural-language game search
 
 Start the API, the existing embeddings service, PostgreSQL, and Qdrant with a

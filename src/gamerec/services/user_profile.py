@@ -15,6 +15,18 @@ PREFERENCE_WEIGHTS = {"liked": 1.0, "neutral": 0.4, "disliked": -0.6}
 UNRATED_WEIGHT = 0.5
 MIN_PROFILE_NORM = 1e-12
 
+
+def apply_explicit_playtime_floor(
+    playtime_weight: float, preference: str | None
+) -> float:
+    """Keep explicit feedback at its preference-only strength even when unplayed."""
+    return (
+        max(1.0, playtime_weight)
+        if preference in {"liked", "disliked"}
+        else playtime_weight
+    )
+
+
 @dataclass(frozen=True)
 class UserGameProfile:
     steam_app_id: int
@@ -22,15 +34,16 @@ class UserGameProfile:
     playtime_minutes: int | None
     preference: str | None
 
+
 def construct_profile_vector(
     games: list[UserGameProfile],
     *,
     dimensions: int = settings.embeddings_vector_size,
 ) -> list[float] | None:
-    
+
     if dimensions <= 0:
         raise ValueError("dimensions must be positive")
-    
+
     valid_games = [
         game
         for game in games
@@ -41,19 +54,15 @@ def construct_profile_vector(
 
     if not valid_games:
         return None
-    
+
     sufficient_playtime = (
         sum(
-            (game.playtime_minutes or 0) >= MIN_PLAYTIME_MINUTES
-            for game in valid_games
+            (game.playtime_minutes or 0) >= MIN_PLAYTIME_MINUTES for game in valid_games
         )
         >= MIN_PLAYED_GAMES
     )
 
-    has_preferences = any(
-        game.preference in PREFERENCE_WEIGHTS
-        for game in valid_games
-    )
+    has_preferences = any(game.preference in PREFERENCE_WEIGHTS for game in valid_games)
 
     weights = {
         game.steam_app_id: (
@@ -69,8 +78,9 @@ def construct_profile_vector(
 
     if sufficient_playtime:
         transformed = {
-            game.steam_app_id: log1p(
-                max(0, game.playtime_minutes or 0)
+            game.steam_app_id: apply_explicit_playtime_floor(
+                log1p(max(0, game.playtime_minutes or 0)),
+                game.preference,
             )
             for game in valid_games
         }
@@ -79,9 +89,7 @@ def construct_profile_vector(
 
         weights = {
             game.steam_app_id: (
-                weights[game.steam_app_id]
-                * transformed[game.steam_app_id]
-                / total
+                weights[game.steam_app_id] * transformed[game.steam_app_id] / total
             )
             for game in valid_games
         }
@@ -90,10 +98,7 @@ def construct_profile_vector(
         return None
 
     profile = [
-        fsum(
-            weights[game.steam_app_id] * game.vector[axis]
-            for game in valid_games
-        )
+        fsum(weights[game.steam_app_id] * game.vector[axis] for game in valid_games)
         for axis in range(dimensions)
     ]
 
@@ -109,7 +114,7 @@ async def build_user_profile_vector(
     db: AsyncSession,
     steamid64: str,
 ) -> tuple[list[float], set[int]] | None:
-    
+
     statement = (
         select(
             UserGame.steam_app_id,
@@ -131,10 +136,12 @@ async def build_user_profile_vector(
 
     if not rows:
         return None
-    
-    owned_ids = {appid for appid, _, _ in rows} # rows have appid, playtime, preference
 
-    vectors = await fetch_game_vectors(db, sorted(owned_ids)) # get embeddings for owned games
+    owned_ids = {appid for appid, _, _ in rows}  # rows have appid, playtime, preference
+
+    vectors = await fetch_game_vectors(
+        db, sorted(owned_ids)
+    )  # get embeddings for owned games
 
     if not vectors:
         return None
@@ -150,7 +157,9 @@ async def build_user_profile_vector(
         if appid in vectors
     ]
 
-    profile = construct_profile_vector(games, dimensions=settings.embeddings_vector_size)
+    profile = construct_profile_vector(
+        games, dimensions=settings.embeddings_vector_size
+    )
 
     if profile is None:
         return None
@@ -166,7 +175,7 @@ async def fetch_game_vectors(
 
     if not steam_app_ids:
         return None
-    
+
     statement = select(GameEmbedding.steam_app_id, GameEmbedding.embedding).where(
         GameEmbedding.steam_app_id.in_(steam_app_ids),
         GameEmbedding.model_name == settings.embeddings_model_name,
@@ -177,5 +186,7 @@ async def fetch_game_vectors(
         rows = (await db.execute(statement)).all()
 
     return {
-        steam_app_id: embedding for steam_app_id, embedding in rows if embedding is not None
+        steam_app_id: embedding
+        for steam_app_id, embedding in rows
+        if embedding is not None
     }

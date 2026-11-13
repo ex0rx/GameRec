@@ -1,9 +1,10 @@
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamerec.models.game import Game
 from gamerec.models.user import User
 from gamerec.models.user_game import UserGame
+from gamerec.models.user_game_preference import UserGamePreference
 
 
 async def get_user_library(
@@ -28,8 +29,15 @@ async def get_user_library(
     user_games_count = user_games_count_result.scalar_one()
 
     query_user_library = (
-        select(UserGame, Game)
+        select(UserGame, Game, UserGamePreference.preference)
         .join(Game, UserGame.steam_app_id == Game.steam_app_id)
+        .outerjoin(
+            UserGamePreference,
+            and_(
+                UserGamePreference.steamid64 == UserGame.steamid64,
+                UserGamePreference.steam_app_id == UserGame.steam_app_id,
+            ),
+        )
         .where(UserGame.steamid64 == steamid64)
         .order_by(UserGame.steam_app_id)
         .offset(offset)
@@ -41,13 +49,14 @@ async def get_user_library(
 
     games = []
 
-    for user_game, game in user_library:
+    for user_game, game, preference in user_library:
         games.append(
             {
                 "steam_app_id": game.steam_app_id,
                 "name": game.name,
                 "playtime_forever_minutes": user_game.playtime_forever_minutes,
                 "playtime_2weeks_minutes": user_game.playtime_2weeks_minutes,
+                "preference": preference,
             }
         )
 

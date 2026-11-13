@@ -2,17 +2,23 @@ import { ArrowUpRight } from 'lucide-react'
 import { Artwork } from '../../components/Artwork'
 import type { LibraryGame } from '../../api/types'
 import { formatPlaytime } from './playtime'
+import { GamePreferenceControls } from './GamePreferenceControls'
+import { preferenceLabel } from './preference'
 
 export function LibraryGameRow({
   game,
+  steamId,
+  preferencesAllowed,
   onInspect,
 }: {
   game: LibraryGame
+  steamId: string
+  preferencesAllowed: boolean
   onInspect: (trigger: HTMLElement) => void
 }) {
   const title = game.name.trim() || `Steam app ${game.steam_app_id}`
   return (
-    <article className="library-game-row">
+    <article className="library-game-row" data-steam-app-id={game.steam_app_id}>
       <button
         className="game-cover-button"
         aria-label={`Inspect ${title}`}
@@ -36,6 +42,17 @@ export function LibraryGameRow({
             </div>
           )}
         </dl>
+        {import.meta.env.DEV && preferencesAllowed ? (
+          <GamePreferenceControls
+            key={`${steamId}:${game.steam_app_id}`}
+            steamId={steamId}
+            appId={game.steam_app_id}
+            title={title}
+            preference={game.preference ?? null}
+          />
+        ) : (
+          <p className="game-preference-readonly">{preferenceLabel(game.preference ?? null)}</p>
+        )}
       </div>
       <a
         className="library-steam-link"

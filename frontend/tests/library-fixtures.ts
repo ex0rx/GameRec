@@ -8,27 +8,39 @@ export const libraryGames: LibraryGame[] = [
     name: 'Z — A very long library title with an adventure subtitle and room for another chapter',
     playtime_forever_minutes: 90,
     playtime_2weeks_minutes: 45,
+    preference: null,
   },
   {
     steam_app_id: 20,
     name: 'A quieter adventure',
     playtime_forever_minutes: 0,
     playtime_2weeks_minutes: 0,
+    preference: null,
   },
   {
     steam_app_id: 30,
     name: '   ',
     playtime_forever_minutes: null,
     playtime_2weeks_minutes: null,
+    preference: null,
   },
 ]
 
 export function libraryResponse(
   games: LibraryGame[] = libraryGames,
-  options: { steamId?: string; total?: number; offset?: number; syncedAt?: string | null } = {},
+  options: {
+    steamId?: string
+    total?: number
+    offset?: number
+    syncedAt?: string | null
+    syncAllowed?: boolean
+    preferencesAllowed?: boolean
+  } = {},
 ): LibraryResponse {
   return {
     steamid64: options.steamId ?? USER_A,
+    sync_allowed: options.syncAllowed ?? false,
+    preference_writes_allowed: options.preferencesAllowed ?? false,
     total_games: options.total ?? games.length,
     limit: 50,
     offset: options.offset ?? 0,
@@ -43,4 +55,5 @@ export const pagedLibraryGames = Array.from({ length: 65 }, (_, index) => ({
   name: `Stored game ${index + 1}`,
   playtime_forever_minutes: 1200,
   playtime_2weeks_minutes: null,
+  preference: null,
 }))

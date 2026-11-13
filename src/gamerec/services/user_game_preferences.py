@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamerec.models.game import Game
 from gamerec.models.user import User
+from gamerec.models.user_game import UserGame
 from gamerec.models.user_game_preference import UserGamePreference
 
 
@@ -12,6 +13,10 @@ class UserNotFoundError(Exception):
 
 
 class GameNotFoundError(Exception):
+    pass
+
+
+class GameNotOwnedError(Exception):
     pass
 
 
@@ -34,6 +39,15 @@ async def upsert_user_game_preference(
 
     if not game:
         raise GameNotFoundError()
+
+    ownership = await db.scalar(
+        select(UserGame.steam_app_id).where(
+            UserGame.steamid64 == steamid64,
+            UserGame.steam_app_id == steam_app_id,
+        )
+    )
+    if ownership is None:
+        raise GameNotOwnedError()
 
     preference_statement = (
         insert(UserGamePreference)
